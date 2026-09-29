@@ -1,0 +1,162 @@
+@use './tokens';
+
+// ---------- reset ----------
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--of-font-family);
+  font-size: var(--of-font-size-base);
+  line-height: var(--of-line-height-base);
+  color: var(--of-text-primary);
+  background: var(--of-bg-body);
+  // 现有系统为固定视口无横向滚动，全流式自适应
+  overflow-x: hidden;
+}
+
+// ---------- 滚动条（现有系统隐藏原生滚动条，此处补可见细滚动条以提升可用性）----------
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+// ---------- 原生 antd 覆写（Token 无法覆盖的部分）----------
+// 表头文字实测 500 且居中，padding 与单元格保持一致以确保对齐
+// 使用更高优先级确保覆盖 antd 的默认样式
+// 排除勾选框列，避免影响对齐
+.ant-table-thead > tr > th:not(.ant-table-selection-column),
+.ant-table-thead > tr > th.ant-table-cell:not(.ant-table-selection-column) {
+  padding: 16px !important;
+  font-weight: var(--of-font-weight-medium);
+  text-align: center !important;
+}
+
+// 勾选框列保持默认样式
+.ant-table-thead > tr > th.ant-table-selection-column {
+  padding: 16px !important;
+}
+
+// 表格容器透明，由外层卡片提供底色
+.ant-table {
+  background: transparent;
+}
+
+// ---------- 表格底色：单元格透明 + 行级上色 ----------
+//
+// 分工（新增任何"行状态"前请先读这段）：
+//   普通单元格 → 永远透明，只当"窗口"，让 <tr> 的颜色透上来
+//   行状态     → 设在 <tr> 上，改 --of-row-bg 一个变量即可
+//   固定列     → 唯一例外，必须不透明（它悬浮在横向滚动的内容之上），
+//                底色读 --of-row-bg，从而自动跟随行状态
+//
+// --of-row-bg 是"当前行底色"的唯一开关。新增预警行/选中行/高亮行时：
+//   .warning-row { --of-row-bg: #4a1f1f; background: var(--of-row-bg); }
+// 固定列会自动同色，无需再为固定列补任何规则。
+
+// 默认行底色 = 卡片色。固定列直接用它，普通单元格仍透明，
+// 二者视觉一致，因为卡片色本就是表格容器的底色。
+// 用 :where() 把权重压到 (0,0,0)，好让业务页一个单类名
+// （.warning-row { --of-row-bg: ... }）就能覆盖，不必跟这里比权重。
+:where(.ant-table-tbody > tr.ant-table-row) {
+  --of-row-bg: var(--of-bg-card);
+}
+
+// 普通单元格保持透明。单元格一旦不透明，就会把整行状态盖死。
+.ant-table-cell {
+  background: transparent !important;
+}
+
+// 行 hover：改变量（固定列由此自动跟随）+ 给普通单元格上色。
+// 普通单元格这条必须带 !important —— 上面 .ant-table-cell 的 transparent !important
+// 会盖过任何不带 !important 的行级底色（这正是"hover 只对操作列生效"的成因）。
+.ant-table-tbody > tr.ant-table-row:hover,
+.ant-table-tbody > tr.ant-table-row:has(> td.ant-table-cell-row-hover) {
+  --of-row-bg: var(--of-bg-row-hover);
+}
+
+.ant-table-tbody > tr.ant-table-row:hover > td,
+.ant-table-tbody > tr > td.ant-table-cell-row-hover {
+  background: var(--of-row-bg) !important;
+}
+
+// 固定列不透明 —— 透明会让下方列穿透上来（表头叠字、操作列压住数字）。
+// 底色读 --of-row-bg，行状态一改变量就自动跟随，
+// 不必为每种状态各写一条固定列规则。
+.ant-table-tbody > tr > td.ant-table-cell-fix-left,
+.ant-table-tbody > tr > td.ant-table-cell-fix-right {
+  background: var(--of-row-bg, var(--of-bg-card)) !important;
+}
+
+// 表头固定列：表头没有行状态，直接给卡片色。
+// 注：普通表头单元格被上面的 .ant-table-cell 透明规则命中，实际透出的是卡片色，
+// 并非 --of-bg-table-head；故此处也取 --of-bg-card，否则会是一块突兀的亮色。
+.ant-table-thead > tr > th.ant-table-cell-fix-left,
+.ant-table-thead > tr > th.ant-table-cell-fix-right {
+  background: var(--of-bg-card) !important;
+}
+
+// 固定列阴影也移除
+.ant-table-cell-fix-left::after,
+.ant-table-cell-fix-right::after {
+  box-shadow: none !important;
+}
+
+// 链接型操作按钮实测色
+.ant-btn-link {
+  color: var(--of-color-link);
+
+  &:hover {
+    color: var(--of-color-link-hover);
+  }
+}
+
+// 弹窗页脚分割线实测值
+.ant-modal-footer {
+  border-top: var(--of-border-width) solid var(--of-border-modal);
+  padding: 10px 16px;
+}
+
+.ant-modal-header {
+  padding: 16px 24px;
+  border-bottom: none;
+}
+
+// ---------- 工具类 ----------
+.of-text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.of-flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+// 筛选栏字段：移除 a-form-item 的默认 margin-bottom，确保与按钮垂直对齐
+.of-field {
+  margin-bottom: 0 !important;
+}

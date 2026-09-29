@@ -1,0 +1,115 @@
+// =============================================================
+// Design Tokens —— 全部来自 AIRIOT 现有系统 (172.17.0.68) 实测计算样式
+// 量取时间：2026-07-26  视口：1920x1080
+// 标注 [派生] 的值为现有系统缺失、按 Ant Design 算法推导，需客户确认
+// =============================================================
+
+:root {
+  // ---------- 品牌 / 主色 ----------
+  --of-color-primary: #1481a6; // 实测 rgb(20,129,166) 主按钮底色
+  --of-color-primary-hover: #2a9cc2; // [派生] primary 提亮
+  --of-color-primary-active: #0f6683; // [派生] primary 压暗
+  --of-color-primary-bg: rgba(20, 129, 166, 0.7); // 分页选中底
+  --of-color-primary-border: rgba(87, 196, 247, 0.3); // 输入框描边
+
+  // ---------- 强调色（链接 / 可点文字） ----------
+  --of-color-link: #57c4f7; // 实测 编辑/详情 链接
+  --of-color-link-hover: #7fd4fa; // [派生]
+  --of-color-accent-cyan: #6dd2e8; // Tab 描边
+  --of-color-accent-ice: #d4f8ff; // 统计数值
+  --of-color-accent-pale: #b8e1ff; // 登录页标签
+
+  // ---------- 语义色 ----------
+  --of-color-error: #ff6666; // 实测 禁止进入=是
+  --of-color-success: #52c41a; // [派生] antd 默认，现有系统未出现
+  --of-color-warning: #faad14; // [派生] antd 默认，现有系统未出现
+  --of-color-info: var(--of-color-link);
+
+  // ---------- 中性 / 背景（暗色单主题） ----------
+  --of-bg-header: #1e262f; // 顶栏
+  --of-bg-sider: #1c2630; // 侧栏
+  --of-bg-body: #16202a; // 页面底（内容区外层）
+  --of-bg-card: #18222b; // 卡片 / 查询栏 / 表格容器
+  --of-bg-table-head: #223647; // 表头
+  --of-bg-row-hover: #24333c; // 行 hover
+  --of-bg-btn-default: #3d4a59; // 次级按钮（重置）
+  --of-bg-btn-default-hover: #4c5b6c; // [派生] 现有系统自绘按钮无 hover 态
+  --of-bg-select: #363d45; // 下拉选择器
+  --of-bg-modal: rgba(30, 38, 47, 0.85); // 弹窗面板
+  --of-bg-modal-header: #182028; // 弹窗标题栏
+  --of-bg-mask: rgba(0, 0, 0, 0.45); // 遮罩
+  --of-bg-menu-selected: #166582; // 侧栏选中项
+
+  // ---------- 边框 / 分割 ----------
+  --of-border-table: #1b3640; // 表格行分割线
+  --of-border-modal: #2f4852; // 弹窗页脚分割线
+  --of-border-width: 1px;
+
+  // ---------- 文字 ----------
+  --of-text-primary: #ffffff; // 正文 / 表格内容
+  --of-text-secondary: rgba(255, 255, 255, 0.8); // 表单标签
+  --of-text-tertiary: rgba(255, 255, 255, 0.65); // 侧栏未选中
+  --of-text-quaternary: rgba(255, 255, 255, 0.5); // 分页总数
+  --of-text-placeholder: #bfbfbf; // 输入占位
+  --of-text-brand: rgba(255, 255, 255, 0.95); // 平台标题
+  --of-text-topnav: #c7d1dc; // 顶栏未选中
+  --of-text-tab-inactive: #87aab2; // Tab 未选中
+
+  // ---------- 字体 ----------
+  --of-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --of-font-family-brand: 'AlimamaShuHeiTi-Bold', var(--of-font-family); // 顶栏标题专用字形
+
+  --of-font-size-xs: 12px; // 统计标签 / 列表项
+  --of-font-size-base: 14px; // 正文基线
+  --of-font-size-lg: 16px; // 弹窗标题 / Tab
+  --of-font-size-xl: 20px; // 平台标题
+  --of-font-size-stat: 28px; // 统计数值
+  --of-font-size-display: 32px; // 登录页大标题
+
+  --of-font-weight-normal: 400;
+  --of-font-weight-medium: 500; // 表头 / 顶栏 / 分页
+  --of-font-weight-bold: 700; // 统计数值
+
+  --of-line-height-base: 22px; // 14px 正文
+  --of-line-height-xs: 16px; // 12px 标签
+  --of-line-height-control: 40px; // 菜单项 / 树节点
+  --of-line-height-stat: 32px;
+
+  // ---------- 间距（4px 基准，实测主节奏 8/16/24） ----------
+  --of-spacing-1: 4px;
+  --of-spacing-2: 8px;
+  --of-spacing-3: 12px;
+  --of-spacing-4: 16px; // 内容区 / 卡片 / 单元格 主间距
+  --of-spacing-5: 24px; // 弹窗内边距 / 表单项间距
+  --of-spacing-6: 32px;
+
+  // ---------- 圆角 ----------
+  --of-radius-none: 0; // 低代码自绘按钮 / 卡片实测为 0
+  --of-radius-base: 4px; // antd 组件全局圆角
+  --of-radius-sm: 2px; // 复选框
+
+  // ---------- 布局尺寸 ----------
+  --of-layout-header-height: 52px;
+  --of-layout-header-padding-x: 17px;
+  --of-layout-sider-width: 256px;
+  --of-layout-sider-collapsed-width: 48px;
+  --of-layout-content-padding: 16px;
+  --of-layout-panel-width: 368px; // 业务页右侧面板
+  --of-layout-logo-size: 38px;
+
+  // ---------- 控件尺寸 ----------
+  --of-control-height: 32px; // 输入框 / 按钮 / 选择器 / 分页
+  --of-control-height-menu: 40px; // 菜单项
+  --of-control-padding-x: 11px; // 输入框
+  --of-btn-width: 76px; // 查询/重置/新增 定宽
+  --of-table-head-height: 55px;
+  --of-table-row-height: 65px;
+  --of-table-cell-padding: 16px;
+  --of-modal-width: 600px;
+
+  // ---------- 层级 / 动效 ----------
+  --of-shadow-modal: 0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  --of-transition-base: 0.2s cubic-bezier(0.645, 0.045, 0.355, 1); // [派生]
+}

@@ -1,0 +1,136 @@
+/**
+ * 预警与事件真实数据（精简版）
+ * 5条预警 + 2条事件，覆盖各种等级和状态
+ */
+
+import type { Alert, Event } from '@/types/alert'
+import { AlertLevel, AlertStatus, EventLevel, EventStatus, AlertSourceType } from '@/types/alert'
+
+/**
+ * 预警数据（5条）- 覆盖3个等级 + 5种状态
+ */
+export const REAL_ALERTS: Alert[] = [
+  {
+    id: 'alert-001',
+    type: 'alert',
+    level: AlertLevel.High,
+    title: 'Koulele营地东围界人员入侵',
+    description: '东围界检测到2名不明人员翻越围栏，正在向营地方向移动。',
+    time: '3分钟前',
+    status: AlertStatus.Tracking,
+    source: '高点摄像头HC-K02 AI识别',
+    sourceType: AlertSourceType.AI,
+    location: 'Koulele营地-东围界',
+    coords: { lat: 15.257123, lng: 13.515678 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    recommendedDrones: ['REAL-C-001', 'REAL-A-003'],
+    createdAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 1 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'alert-002',
+    type: 'alert',
+    level: AlertLevel.Medium,
+    title: 'Dibeilla营地西围界车辆靠近',
+    description: '',
+    time: '18分钟前',
+    status: AlertStatus.Verifying,
+    source: '高点摄像头HC-D01',
+    sourceType: AlertSourceType.Camera,
+    location: 'Dibeilla营地-西围界',
+    coords: { lat: 13.688456, lng: 14.021234 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    recommendedDrones: ['REAL-C-002', 'REAL-A-002'],
+    createdAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'alert-003',
+    type: 'alert',
+    level: AlertLevel.Low,
+    title: 'Jaouro营地周边动物活动',
+    description: '周界传感器检测到轻微触发，疑似大型动物经过。',
+    time: '1小时前',
+    status: AlertStatus.Closed,
+    source: '周界传感器WJ-J12',
+    sourceType: AlertSourceType.System,
+    location: 'Jaouro营地-南围界',
+    coords: { lat: 14.845678, lng: 13.122345 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'alert-004',
+    type: 'alert',
+    level: AlertLevel.High,
+    title: 'Sokor营地管道异常声响',
+    description: '管道3号阀门附近检测到异常声响，疑似泄漏征兆。',
+    time: '25分钟前',
+    status: AlertStatus.Escalated,
+    source: '声学传感器AS-S03',
+    sourceType: AlertSourceType.System,
+    location: 'Sokor营地-管道3号阀门',
+    coords: { lat: 14.513456, lng: 12.680123 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'alert-005',
+    type: 'alert',
+    level: AlertLevel.Medium,
+    title: 'Goumeri营地外围人员聚集',
+    description: '营地外围1公里处检测到5-8人聚集，行为可疑。',
+    time: '8分钟前',
+    status: AlertStatus.Pending,
+    source: '安保人员上报',
+    sourceType: AlertSourceType.Manual,
+    location: 'Goumeri营地-外围东侧',
+    coords: { lat: 13.914567, lng: 13.236789 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    createdAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+  },
+]
+
+/**
+ * 事件数据（2条）- 覆盖2个等级 + 2种状态
+ */
+export const REAL_EVENTS: Event[] = [
+  {
+    id: 'event-001',
+    type: 'event',
+    level: EventLevel.Level3,
+    title: 'Sokor营地管道泄漏',
+    description: '管道3号阀门处检测到较大规模泄漏，已启动应急响应流程。',
+    time: '15分钟前',
+    status: EventStatus.Handling,
+    source: '预警升级（#alert-004）',
+    sourceAlertId: 'alert-004',
+    location: 'Sokor营地-管道3号阀门',
+    coords: { lat: 14.513456, lng: 12.680123 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    responders: ['person-s01', 'person-s05', 'person-s12'],
+    dispatchedDrones: ['REAL-C-004'],
+    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 'event-002',
+    type: 'event',
+    level: EventLevel.Level4,
+    title: 'Jaouro营地围栏轻微破损',
+    description: '北围界发现围栏轻微破损，疑似动物撞击所致。',
+    time: '2小时前',
+    status: EventStatus.Controlled,
+    source: '预警升级（#20260823-0012）',
+    sourceAlertId: 'alert-hist-012',
+    location: 'Jaouro营地-北围界',
+    coords: { lat: 14.850123, lng: 13.126789 },
+    imageUrl: '/mock-images/alert-k-001.jpg',
+    responders: ['person-j02', 'person-j08'],
+    createdAt: new Date(Date.now() - 120 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+  },
+]

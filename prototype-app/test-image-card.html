@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>调度卡片图片预览</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #1a2332;
+      font-family: "Microsoft YaHei", sans-serif;
+      color: #e0e6f0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      color: #1481a6;
+    }
+    .preview {
+      text-align: center;
+      margin-top: 30px;
+    }
+    canvas {
+      border: 2px solid #1481a6;
+      border-radius: 8px;
+      max-width: 100%;
+      height: auto;
+    }
+    .controls {
+      text-align: center;
+      margin: 20px 0;
+    }
+    button {
+      background: #1481a6;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 0 10px;
+    }
+    button:hover {
+      background: #0a5f7d;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📱 调度卡片图片预览</h1>
+    <div class="controls">
+      <button onclick="generateCard()">生成图片</button>
+      <button onclick="downloadCard()">下载图片</button>
+    </div>
+    <div class="preview">
+      <canvas id="canvas" width="750" height="1200"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Mock数据
+    const mockAlert = {
+      id: 'alert-001',
+      level: 'high',
+      title: 'Koulele营地东围界人员入侵',
+      description: '东围界检测到2名不明人员翻越围栏，正在向营地方向移动。',
+      source: '高点摄像头HC-K02 AI识别',
+      location: 'Koulele营地-东围界',
+      coords: { lat: 15.257123, lng: 13.515678 },
+      createdAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+    };
+
+    const mockDrones = [
+      {
+        name: 'UAV2 Koulele',
+        uavClass: 'A',
+        status: 'available',
+        camp: 'KOULELE',
+        telemetry: {
+          battery: 98,
+          position: { lat: 15.254788, lng: 13.512345 }
+        }
+      }
+    ];
+
+    const mockCommander = {
+      name: '张三',
+      phone: '+86 13812345678'
+    };
+
+    function roundRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function shadeColor(color, percent) {
+      const num = parseInt(color.replace('#', ''), 16);
+      const amt = Math.round(2.55 * percent);
+      const R = (num >> 16) + amt;
+      const G = ((num >> 8) & 0x00ff) + amt;
+      const B = (num & 0x0000ff) + amt;
+      return '#' + (
+        0x1000000 +
+        (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
+        (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
+        (B < 255 ? (B < 1 ? 0 : B) : 255)
+      ).toString(16).slice(1);
+    }
+
+    function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+      const words = text.split('');
+      let line = '';
+      let currentY = y;
+
+      for (let i = 0; i < words.length; i++) {
+        const testLine = line + words[i];
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && i > 0) {
+          ctx.fillText(line, x, currentY);
+          line = words[i];
+          currentY += lineHeight;
+        } else {
+          line = testLine;
+        }
+      }
+      ctx.fillText(line, x, currentY);
+    }
+
+    function generateCard() {
+      // 背景渐变
+      const bgGradient = ctx.createLinearGradient(0, 0, 0, 1200);
+      bgGradient.addColorStop(0, '#0a1929');
+      bgGradient.addColorStop(1, '#1a2332');
+      ctx.fillStyle = bgGradient;
+      ctx.fillRect(0, 0, 750, 1200);
+
+      // 顶部红色条
+      const headerColor = '#ff4757';
+      const headerGradient = ctx.createLinearGradient(0, 0, 750, 0);
+      headerGradient.addColorStop(0, headerColor);
+      headerGradient.addColorStop(1, shadeColor(headerColor, -20));
+      ctx.fillStyle = headerGradient;
+      ctx.fillRect(0, 0, 750, 100);
+
+      // 标题
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 32px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('🚨 紧急调度任务', 375, 55);
+
+      // ID
+      ctx.font = '18px Consolas, monospace';
+      ctx.fillText(mockAlert.id, 375, 85);
+
+      let yPos = 130;
+      const padding = 30;
+      const cardWidth = 690;
+
+      // 基本信息区标题
+      ctx.fillStyle = '#1481a6';
+      ctx.fillRect(padding, yPos, 4, 24);
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('基本信息', padding + 15, yPos + 18);
+      yPos += 40;
+
+      // 等级标签
+      ctx.fillStyle = headerColor;
+      roundRect(ctx, padding, yPos, 120, 50, 8);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 24px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('🔴 高危', padding + 60, yPos + 33);
+
+      // 位置
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.fillText('位置：' + mockAlert.location, padding + 140, yPos + 25);
+
+      // 坐标
+      ctx.font = '14px Consolas, monospace';
+      ctx.fillStyle = '#8a95a8';
+      ctx.fillText(
+        `${mockAlert.coords.lat.toFixed(6)}°N, ${mockAlert.coords.lng.toFixed(6)}°E`,
+        padding + 140,
+        yPos + 45
+      );
+
+      yPos += 70;
+
+      // 时间和来源
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+      roundRect(ctx, padding, yPos, 330, 60, 6);
+      roundRect(ctx, padding + 345, yPos, 345, 60, 6);
+
+      ctx.fillStyle = '#8a95a8';
+      ctx.font = '14px "Microsoft YaHei", sans-serif';
+      ctx.fillText('时间', padding + 15, yPos + 25);
+      ctx.fillText('来源', padding + 360, yPos + 25);
+
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = '16px "Microsoft YaHei", sans-serif';
+      ctx.fillText('08/24 17:22', padding + 15, yPos + 45);
+      wrapText(ctx, mockAlert.source, padding + 360, yPos + 45, 315, 18);
+
+      yPos += 80;
+
+      // 现场情况
+      ctx.fillStyle = '#1481a6';
+      ctx.fillRect(padding, yPos, 4, 24);
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.fillText('现场情况', padding + 15, yPos + 18);
+      yPos += 40;
+
+      ctx.fillStyle = 'rgba(255, 107, 53, 0.1)';
+      roundRect(ctx, padding, yPos, cardWidth, 80, 8);
+
+      ctx.fillStyle = '#ffc107';
+      ctx.font = 'bold 18px "Microsoft YaHei", sans-serif';
+      wrapText(ctx, mockAlert.description, padding + 15, yPos + 30, cardWidth - 30, 22);
+
+      yPos += 100;
+
+      // 推荐无人机
+      ctx.fillStyle = '#1481a6';
+      ctx.fillRect(padding, yPos, 4, 24);
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.fillText('推荐无人机', padding + 15, yPos + 18);
+      yPos += 40;
+
+      // 无人机卡片
+      ctx.fillStyle = 'rgba(0, 217, 126, 0.1)';
+      roundRect(ctx, padding, yPos, cardWidth, 90, 8);
+
+      // 序号圆圈
+      ctx.fillStyle = '#00d97e';
+      ctx.beginPath();
+      ctx.arc(padding + 30, yPos + 45, 20, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 20px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('1', padding + 30, yPos + 52);
+
+      // 无人机信息
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.fillText('UAV2 Koulele (A类)', padding + 70, yPos + 30);
+
+      ctx.fillStyle = '#00d97e';
+      ctx.font = 'bold 18px "Microsoft YaHei", sans-serif';
+      ctx.fillText('0.4km | 预计1分钟到达', padding + 70, yPos + 55);
+
+      ctx.fillStyle = '#8a95a8';
+      ctx.font = '14px "Microsoft YaHei", sans-serif';
+      ctx.fillText('电量 98% | 状态 待命中 | KOULELE', padding + 70, yPos + 75);
+
+      yPos += 110;
+
+      // 联系方式
+      ctx.fillStyle = '#1481a6';
+      ctx.fillRect(padding, yPos, 4, 24);
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = 'bold 20px "Microsoft YaHei", sans-serif';
+      ctx.fillText('联系方式', padding + 15, yPos + 18);
+      yPos += 40;
+
+      ctx.fillStyle = 'rgba(0, 149, 255, 0.1)';
+      roundRect(ctx, padding, yPos, cardWidth, 70, 8);
+
+      ctx.fillStyle = '#0095ff';
+      ctx.font = 'bold 18px "Microsoft YaHei", sans-serif';
+      ctx.fillText('指挥员: ' + mockCommander.name, padding + 15, yPos + 30);
+
+      ctx.fillStyle = '#e0e6f0';
+      ctx.font = '16px Consolas, monospace';
+      ctx.fillText(mockCommander.phone, padding + 15, yPos + 55);
+
+      // 底部时间戳
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.fillRect(0, 1150, 750, 50);
+
+      ctx.fillStyle = '#8a95a8';
+      ctx.font = '14px "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('生成时间: ' + new Date().toLocaleString('zh-CN'), 375, 1180);
+    }
+
+    function downloadCard() {
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `调度卡片-${Date.now()}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }, 'image/png');
+    }
+
+    // 页面加载时自动生成
+    window.onload = generateCard;
+  </script>
+</body>
+</html>

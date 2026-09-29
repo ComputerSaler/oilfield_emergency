@@ -1,0 +1,2279 @@
+<script setup lang="ts">
+/**
+ * 事件详情面板（PC 详情页与大屏覆盖层共用）
+ * 对应 PRD-事件管理-工作台 V1.0 §5.2–5.5；大屏差异见 PRD-大屏-事件感知处置-事件 §2、§4
+ * 全屏三栏布局：左侧基本信息（240px，可折叠）/ 中央地图+任务看板 / 右侧5Tab面板（360px）
+ * 底部操作栏按状态动态显示可用操作
+ *
+ * mode = 'page'      PC 路由页面：全部操作
+ * mode = 'bigscreen' 大屏覆盖层：返回文案「返回驾驶舱」、按钮 48px、
+ *                    仅确认等级 / 提交应急建议 / 驳回建议 / 签发启动令，其余只读
+ */
+import { computed, ref } from 'vue'
+import {
+  ArrowLeftOutlined,
+  EnvironmentOutlined,
+  ClockCircleOutlined,
+  UserOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  PlusOutlined,
+  FileTextOutlined,
+  TeamOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  WarningOutlined,
+  ExclamationCircleOutlined,
+  PaperClipOutlined,
+  UploadOutlined,
+} from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
+import {
+  INCIDENT_RECORDS,
+  ACTION_TASKS,
+  INCIDENT_TIMELINES,
+  EMERGENCY_PROPOSALS,
+  getLevelDeadlineInfo,
+  getPendingProposal,
+  STATUS_LABEL,
+  LEVEL_LABEL,
+  LEVEL_COLOR,
+  STATUS_COLOR,
+  TASK_STATUS_LABEL,
+  TASK_STATUS_COLOR,
+  TERMINAL_STATUSES,
+  type IncidentRecord,
+  type IncidentLevel,
+  type ActionTask,
+  type IncidentTimeline,
+  type TaskStatus,
+} from '@/mock/incidentWorkbench'
+import { ALERT_RECORDS } from '@/mock/alertWorkbench'
+
+/** 原型当前登录用户（默认拥有全部 12 个权限点） */
+const CURRENT_USER = '张志远'
+/** 平台用户（处置任务责任人候选） */
+const PLATFORM_USERS = ['张志远', '王力', '李华', '陈国华']
+
+const props = withDefaults(defineProps<{
+  incidentId: string
+  mode?: 'page' | 'bigscreen'
+}>(), { mode: 'page' })
+
+const emit = defineEmits<{
+  /** 点击返回按钮 */
+  (e: 'back'): void
+  /** 点击来源预警编号（由外层决定跳路由还是叠层） */
+  (e: 'open-alert', alertId: string): void
+}>()
+
+const isBigscreen = computed(() => props.mode === 'bigscreen')
+
+/** 大屏覆盖层允许的决策操作（PRD-大屏 §4.2） */
+const BIGSCREEN_ACTIONS = ['confirm_level', 'submit_emergency', 'reject_proposal', 'issue_order']
+
+// ==================== 数据 ====================
+
+const incidentId = computed(() => props.incidentId)
+
+const incident = computed<IncidentRecord | undefined>(() =>
+  INCIDENT_RECORDS.find(r => r.incident_id === incidentId.value)
+)
+
+const tasks = computed<ActionTask[]>(() =>
+  ACTION_TASKS.filter(t => t.incident_id === incidentId.value)
+)
+
+const timelines = computed<IncidentTimeline[]>(() =>
+  (INCIDENT_TIMELINES[incidentId.value] ?? []).slice().reverse()
+)
+
+/** 最近一条应急建议（用于左侧状态卡片展示，含已驳回/已批准） */
+const proposal = computed(() => {
+  if (!incident.value?.emergency_proposal_id) return null
+  return EMERGENCY_PROPOSALS[incident.value.emergency_proposal_id] ?? null
+})
+
+/** 当前待审批的应急建议（唯一性判断） */
+const pendingProposal = computed(() => incident.value ? getPendingProposal(incident.value) : null)
+
+/** 处置任务汇总进度：已通过 N / 共 M */
+const taskProgress = computed(() => {
+  const approved = tasks.value.filter(t => t.status === 'approved').length
+  return { approved, total: tasks.value.length, unapproved: tasks.value.length - approved }
+})
+
+/** 处置中「关闭事件」是否可用：所有任务均为已通过 */
+const canCloseInProgress = computed(() =>
+  taskProgress.value.total > 0 && taskProgress.value.unapproved === 0
+)
+
+// ==================== 布局状态 ====================
+
+const leftCollapsed = ref(false)
+const rightTab = ref<'summary' | 'evidence' | 'tasks' | 'timeline' | 'report'>('summary')
+
+// ==================== 弹窗状态 ====================
+
+const showLevelModal = ref(false)
+const showLevelRef = ref(false)
+const showCancelModal = ref(false)
+const showCloseModal = ref(false)
+const showCreateTaskModal = ref(false)
+const showSubmitTaskModal = ref<string | null>(null)
+const submitTaskModalOpen = computed({
+  get: () => showSubmitTaskModal.value !== null,
+  set: (v: boolean) => { if (!v) showSubmitTaskModal.value = null },
+})
+const showVerifyTaskModal = ref(false)
+const showEmergencyModal = ref(false)
+const showIssueOrderModal = ref(false)
+const showRejectProposalModal = ref(false)
+const showUpgradeLevelModal = ref(false)
+
+// 表单
+const levelForm = ref({ selected: '' as string, note: '' })
+const cancelForm = ref({ reason: '' })
+/** 关闭弹窗复用：direct = 事件生效直接关闭；in_progress = 处置中关闭事件 */
+const closeMode = ref<'direct' | 'in_progress'>('direct')
+const closeForm = ref({ reason: '' })
+const createTaskForm = ref({
+  title: '',
+  acceptance_criteria: '',
+  assignee_type: 'platform' as 'platform' | 'external',
+  assignee_user: '' as string,
+  external_name: '',
+  external_contact: '',
+  deadline: null as any,
+})
+const rejectProposalForm = ref({ reason: '' })
+const submitTaskForm = ref({ task_id: '', action_description: '' })
+const verifyTaskForm = ref({ task_id: '', passed: true, rejection_reason: '' })
+const emergencyForm = ref({ summary: '', suggested_actions: '' })
+const upgradeForm = ref({ target_level: '', reason: '' })
+
+// 上报负责人编辑态
+const editingReportUser = ref(false)
+const reportUserInput = ref('')
+
+function startEditReportUser() {
+  reportUserInput.value = incident.value?.report_responsible_user ?? ''
+  editingReportUser.value = true
+}
+function saveReportUser() {
+  // 原型中只更新本地显示
+  if (incident.value) incident.value.report_responsible_user = reportUserInput.value
+  editingReportUser.value = false
+}
+
+// ==================== 辅助 ====================
+
+function goBack() {
+  emit('back')
+}
+
+function goToAlert(alertNo: string) {
+  const alert = ALERT_RECORDS.find(a => a.alert_no === alertNo)
+  if (alert) emit('open-alert', alert.alert_id)
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function relativeTime(iso: string): string {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  return `${Math.floor(diff / 86400)} 天前`
+}
+
+function getTaskStatusLabel(status: TaskStatus): string {
+  return TASK_STATUS_LABEL[status] ?? status
+}
+function getTaskStatusColor(status: TaskStatus): string {
+  return TASK_STATUS_COLOR[status] ?? 'var(--of-text-secondary)'
+}
+
+function isTaskOverdue(task: ActionTask): boolean {
+  return task.status === 'pending' && new Date(task.deadline_at).getTime() < Date.now()
+}
+
+// 底部操作栏可用操作
+const availableActions = computed(() => {
+  if (!incident.value) return []
+  const s = incident.value.status
+  const actions: string[] = []
+
+  // PRD §5.2 底部操作栏
+  if (s === 'pending_level') {
+    actions.push('cancel', 'confirm_level')
+  }
+  if (s === 'active') {
+    actions.push('direct_close', 'create_task', 'upgrade_level')
+  }
+  if (s === 'in_progress') {
+    actions.push('close_in_progress', 'upgrade_level')
+  }
+  // 应急建议唯一性：有待审批建议时隐藏「提交」，显示「驳回」+「签发」（P-10）
+  if (s === 'active' || s === 'in_progress') {
+    if (pendingProposal.value) actions.push('reject_proposal', 'issue_order')
+    else actions.push('submit_emergency')
+  }
+  // 大屏仅保留决策类操作，其余走 PC 后台
+  return isBigscreen.value ? actions.filter(a => BIGSCREEN_ACTIONS.includes(a)) : actions
+})
+
+const isTerminal = computed(() =>
+  TERMINAL_STATUSES.includes(incident.value?.status ?? 'closed')
+)
+
+/** 可新增任务的状态（大屏不可用，任务管理走 PC 后台） */
+const canCreateTask = computed(() =>
+  !isBigscreen.value &&
+  (incident.value?.status === 'active' || incident.value?.status === 'in_progress')
+)
+
+// 分级标准 Tab 数据（来自 PRD-事件管理-事件类型配置 §5.2 内置内容）
+const levelRefTabs = [
+  { key: 'uav', label: '无人机威胁', levels: [
+    { level: 'Ⅰ级', scope: '多营地受威胁，或无人机已进入核心设施区域上方，疑似携带危险物品', risk: '现场人员处于直接威胁中，存在人身伤亡可能', resource: '需同时调动多支应急队伍，需上报集团公司' },
+    { level: 'Ⅱ级', scope: '单一营地受影响，无人机在禁飞区内持续飞行，或来源不明无人机已进入营地边界内', risk: '潜在威胁，需立即核实', resource: '需调动单支应急队伍，需上报安保部' },
+    { level: 'Ⅲ级', scope: '无人机在营地外围 1km 内徘徊，暂未越界', risk: '潜在威胁，需持续监控', resource: '值班员处置，可通知安保部备案' },
+    { level: 'Ⅳ级', scope: '远程无人机活动，或已确认为己方无人机且操作异常', risk: '极低风险', resource: '值班员记录即可，无需上报' },
+  ]},
+  { key: 'person', label: '人员入侵', levels: [
+    { level: 'Ⅰ级', scope: '武装人员进入营地核心区域，或多点突破围界', risk: '现场人员面临直接威胁，存在暴力冲突可能', resource: '需立即启动安全疏散，上报集团公司' },
+    { level: 'Ⅱ级', scope: '不明人员突破围界进入营地', risk: '威胁存在，需立即处置', resource: '需安保队伍拦截，上报安保部' },
+    { level: 'Ⅲ级', scope: '可疑人员在围界外持续游荡，有意图进入迹象', risk: '低风险，需关注', resource: '值班员协调现场安保巡视' },
+    { level: 'Ⅳ级', scope: '偶发人员靠近围界，无持续意图', risk: '极低风险', resource: '记录并保持观察' },
+  ]},
+  { key: 'facility', label: '设施安全', levels: [
+    { level: 'Ⅰ级', scope: '关键设施损毁或失效（如主要管道、发电设施），影响整体运营', risk: '存在安全事故风险', resource: '需紧急维修团队响应，上报集团' },
+    { level: 'Ⅱ级', scope: '重要设施异常（如监控设备、围界损毁），范围局限', risk: '安防盲区风险增加', resource: '需专业维修响应，上报安保部' },
+    { level: 'Ⅲ级', scope: '非关键设备故障，功能降级但有冗余', risk: '低风险', resource: '常规维修工单' },
+    { level: 'Ⅳ级', scope: '轻微设备告警，自动恢复可能', risk: '极低风险', resource: '记录并跟踪' },
+  ]},
+  { key: 'vehicle', label: '车辆异常', levels: [
+    { level: 'Ⅰ级', scope: '车辆武力冲撞围界，或多辆车辆协同异常行为', risk: '存在直接人员威胁', resource: '需立即安保响应，上报集团' },
+    { level: 'Ⅱ级', scope: '单辆车辆越界，驾驶员身份不明', risk: '潜在威胁', resource: '需安保拦截核查' },
+    { level: 'Ⅲ级', scope: '车辆在营地附近异常停留，未越界', risk: '低风险', resource: '值班员记录，通知安保关注' },
+    { level: 'Ⅳ级', scope: '车辆GPS信号异常或超速告警，无安防威胁', risk: '极低风险', resource: '记录并通知车辆管理员' },
+  ]},
+]
+
+const activeLevelRefTab = ref('uav')
+
+// 推荐响应措施（概要 Tab 使用，按事件类型+等级组合）
+const recommendedMeasures = computed(() => {
+  const typeCode = incident.value?.incident_type_code ?? ''
+  const level = incident.value?.level ?? ''
+  const key = `${typeCode}_${level}`
+  const measures: Record<string, string[]> = {
+    'uav_threat_II': [
+      '立即调取预警区域最近高点摄像头画面确认目标',
+      '通知反无操作员就位，准备干扰操作',
+      '通知营地管理员限制人员进入暴露区域',
+      '调度 C 类无人机飞往预警位置进行空中取证',
+      '通知安保部门值班负责人',
+    ],
+    'personnel_intrusion_II': [
+      '通知安保队伍立即就位拦截',
+      '调取围界区域摄像头持续跟踪',
+      '通知营地管理员关闭非必要出入口',
+      '准备疏散非必要人员至安全区',
+    ],
+    'facility_security_III': [
+      '通知维修团队立即到场评估',
+      '安排安保人员在损毁区域执勤',
+      '临时封锁受影响区域，减少人员进入',
+      '提交维修工单，跟踪修复进度',
+    ],
+    'vehicle_abnormal_IV': [
+      '安排巡逻车前往核查',
+      '记录车牌及外观特征',
+      '通知营地门卫保持警惕',
+    ],
+  }
+  return measures[key] ?? []
+})
+
+// ==================== 本地状态流转（原型：直接修改 reactive mock） ====================
+
+const LEVEL_ORDER: Record<string, number> = { I: 1, II: 2, III: 3, IV: 4 }
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+/** 写入时间线 */
+function addTimeline(category: IncidentTimeline['category'], action: string, content: string, operator: string | undefined = CURRENT_USER) {
+  if (!INCIDENT_TIMELINES[incidentId.value]) INCIDENT_TIMELINES[incidentId.value] = []
+  INCIDENT_TIMELINES[incidentId.value].push({
+    id: `tl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    time: nowIso(),
+    category, action, content, operator,
+  })
+}
+
+function touch() {
+  if (incident.value) incident.value.updated_at = nowIso()
+}
+
+/** 上报截止：Ⅰ/Ⅱ 级 30 分钟，Ⅲ/Ⅳ 级 24 小时（事件类型配置默认值） */
+function calcReportDeadline(level: IncidentLevel): string {
+  const mins = level === 'I' || level === 'II' ? 30 : 24 * 60
+  return new Date(Date.now() + mins * 60000).toISOString()
+}
+
+// ── 确认等级 ──
+function openLevelModal() {
+  levelForm.value = { selected: '', note: '' }
+  showLevelModal.value = true
+}
+function onConfirmLevel() {
+  const inc = incident.value
+  if (!inc || inc.status !== 'pending_level') return
+  if (!levelForm.value.selected) { message.error('请选择等级'); return }
+  const lv = levelForm.value.selected as IncidentLevel
+  const note = levelForm.value.note.trim()
+  inc.level = lv
+  inc.level_confirmed_at = nowIso()
+  inc.level_confirmed_by = CURRENT_USER
+  inc.level_note = note || null
+  inc.report_deadline_at = calcReportDeadline(lv)
+  inc.status = 'active'
+  touch()
+  addTimeline('level', '确认等级', `${CURRENT_USER} 确认事件等级为 ${LEVEL_LABEL[lv!]}${note ? `，定级说明：${note}` : ''}`)
+  addTimeline('system', '事件生效', `事件进入事件生效阶段，N2 通知已发送${lv === 'I' || lv === 'II' ? '，已触发上报提醒 N7' : ''}`, undefined)
+  showLevelModal.value = false
+  message.success('等级已确认，事件生效')
+}
+
+// ── 撤销 ──
+function openCancelModal() {
+  cancelForm.value = { reason: '' }
+  showCancelModal.value = true
+}
+function onCancel() {
+  const inc = incident.value
+  if (!inc || inc.status !== 'pending_level') return
+  const reason = cancelForm.value.reason.trim()
+  if (!reason) { message.error('请填写撤销原因'); return }
+  inc.status = 'cancelled'
+  inc.cancel_reason = reason
+  touch()
+  addTimeline('manual', '撤销事件', `${CURRENT_USER} 撤销事件，原因：${reason}`)
+  showCancelModal.value = false
+  message.success('事件已撤销')
+}
+
+// ── 关闭（直接关闭 / 处置中关闭） ──
+function openCloseModal(mode: 'direct' | 'in_progress') {
+  if (mode === 'in_progress' && !canCloseInProgress.value) return
+  closeMode.value = mode
+  closeForm.value = { reason: '' }
+  showCloseModal.value = true
+}
+function onClose() {
+  const inc = incident.value
+  if (!inc) return
+  if (closeMode.value === 'direct' && inc.status !== 'active') return
+  if (closeMode.value === 'in_progress' && (inc.status !== 'in_progress' || !canCloseInProgress.value)) return
+  const reason = closeForm.value.reason.trim()
+  if (!reason) { message.error('请填写关闭原因'); return }
+  inc.status = 'closed'
+  inc.close_reason = reason
+  touch()
+  addTimeline('manual', closeMode.value === 'direct' ? '直接关闭' : '关闭事件', `${CURRENT_USER} 关闭事件，原因：${reason}`)
+  addTimeline('system', '通知发送', 'N9 通知已发送：事件相关操作人', undefined)
+  showCloseModal.value = false
+  message.success('事件已关闭')
+}
+
+// ── 新增处置任务 ──
+function openCreateTaskModal() {
+  createTaskForm.value = {
+    title: '', acceptance_criteria: '', assignee_type: 'platform',
+    assignee_user: '', external_name: '', external_contact: '', deadline: null,
+  }
+  showCreateTaskModal.value = true
+}
+function onCreateTask() {
+  const inc = incident.value
+  if (!inc || !canCreateTask.value) return
+  const f = createTaskForm.value
+  if (!f.title.trim()) { message.error('请填写任务标题'); return }
+  const isExternal = f.assignee_type === 'external'
+  if (isExternal ? !f.external_name.trim() : !f.assignee_user) { message.error('请指定责任人'); return }
+  if (!f.deadline) { message.error('请选择截止时间'); return }
+  const deadlineMs = f.deadline.valueOf()
+  if (deadlineMs <= Date.now()) { message.error('截止时间必须晚于当前时间'); return }
+
+  const assigneeName = isExternal ? `${f.external_name.trim()}（外部）` : f.assignee_user
+  ACTION_TASKS.push({
+    task_id: `t-${Date.now()}`,
+    incident_id: incidentId.value,
+    title: f.title.trim(),
+    acceptance_criteria: f.acceptance_criteria.trim(),
+    assignee_user_id: isExternal ? null : `u_${f.assignee_user}`,
+    assignee_name: assigneeName,
+    assignee_external_name: isExternal ? f.external_name.trim() : null,
+    assignee_external_contact: isExternal ? (f.external_contact.trim() || null) : null,
+    deadline_at: new Date(deadlineMs).toISOString(),
+    status: 'pending',
+    action_description: null,
+    rejection_reason: null,
+    created_by: CURRENT_USER,
+    created_at: nowIso(),
+    submitted_at: null,
+    approved_at: null,
+    approved_by: null,
+  })
+  const wasActive = inc.status === 'active'
+  if (wasActive) inc.status = 'in_progress'
+  touch()
+  addTimeline('task', '创建处置任务', `${CURRENT_USER} 创建处置任务「${f.title.trim()}」，责任人：${assigneeName}`)
+  if (wasActive) addTimeline('system', '进入处置中', '首条处置任务已创建，事件进入处置中', undefined)
+  if (!isExternal) addTimeline('system', '通知发送', `N4 通知已发送：${assigneeName}`, undefined)
+  showCreateTaskModal.value = false
+  message.success('处置任务已创建')
+}
+
+// ── 提交验收 ──
+function openSubmitTaskModal(task: ActionTask) {
+  submitTaskForm.value = { task_id: task.task_id, action_description: '' }
+  showSubmitTaskModal.value = task.task_id
+}
+function onSubmitTask() {
+  const task = ACTION_TASKS.find(t => t.task_id === submitTaskForm.value.task_id)
+  if (!task || task.status !== 'pending') return
+  const desc = submitTaskForm.value.action_description.trim()
+  if (!desc) { message.error('请填写处置措施说明'); return }
+  task.status = 'submitted'
+  task.action_description = desc
+  task.submitted_at = nowIso()
+  touch()
+  addTimeline('task', '提交验收', `${CURRENT_USER} 提交处置任务「${task.title}」验收`)
+  addTimeline('system', '通知发送', `N5 通知已发送：任务发起人 ${task.created_by}`, undefined)
+  showSubmitTaskModal.value = null
+  message.success('已提交验收')
+}
+
+// ── 验收 ──
+function openVerifyTaskModal(task: ActionTask) {
+  verifyTaskForm.value = { task_id: task.task_id, passed: true, rejection_reason: '' }
+  showVerifyTaskModal.value = true
+}
+function onVerifyTask() {
+  const task = ACTION_TASKS.find(t => t.task_id === verifyTaskForm.value.task_id)
+  if (!task || task.status !== 'submitted') return
+  if (verifyTaskForm.value.passed) {
+    task.status = 'approved'
+    task.approved_at = nowIso()
+    task.approved_by = CURRENT_USER
+    addTimeline('task', '验收通过', `${CURRENT_USER} 验收通过「${task.title}」`)
+    message.success('验收通过')
+  } else {
+    const reason = verifyTaskForm.value.rejection_reason.trim()
+    if (!reason) { message.error('请填写驳回原因'); return }
+    task.status = 'pending'
+    task.rejection_reason = reason
+    task.submitted_at = null
+    addTimeline('task', '验收驳回', `${CURRENT_USER} 驳回「${task.title}」，原因：${reason}`)
+    addTimeline('system', '通知发送', `N6 通知已发送：${task.assignee_name}`, undefined)
+    message.success('已驳回，任务重回待处置')
+  }
+  touch()
+  showVerifyTaskModal.value = false
+}
+
+// ── 提交应急启动建议 ──
+function openEmergencyModal() {
+  emergencyForm.value = { summary: '', suggested_actions: '' }
+  showEmergencyModal.value = true
+}
+function onSubmitEmergency() {
+  const inc = incident.value
+  if (!inc || pendingProposal.value) return
+  if (inc.status !== 'active' && inc.status !== 'in_progress') return
+  const summary = emergencyForm.value.summary.trim()
+  if (!summary) { message.error('请填写建议摘要'); return }
+  const id = `ep-${Date.now()}`
+  EMERGENCY_PROPOSALS[id] = {
+    proposal_id: id,
+    incident_id: incidentId.value,
+    summary,
+    suggested_actions: emergencyForm.value.suggested_actions.trim(),
+    level: inc.level,
+    submitted_by: CURRENT_USER,
+    submitted_at: nowIso(),
+    status: 'pending',
+    reviewed_by: null,
+    reviewed_at: null,
+    rejection_reason: null,
+  }
+  inc.emergency_proposal_id = id
+  touch()
+  addTimeline('emergency', '提交应急建议', `${CURRENT_USER} 提交应急启动建议：${summary}`)
+  addTimeline('system', '通知发送', 'N8-A 通知已发送：应急领导小组组长', undefined)
+  showEmergencyModal.value = false
+  message.success('应急启动建议已提交，等待组长审批')
+}
+
+// ── 驳回应急建议 ──
+function openRejectProposalModal() {
+  rejectProposalForm.value = { reason: '' }
+  showRejectProposalModal.value = true
+}
+function onRejectProposal() {
+  const p = pendingProposal.value
+  if (!p) return
+  const reason = rejectProposalForm.value.reason.trim()
+  if (!reason) { message.error('请填写驳回理由'); return }
+  p.status = 'rejected'
+  p.reviewed_by = CURRENT_USER
+  p.reviewed_at = nowIso()
+  p.rejection_reason = reason
+  touch()
+  addTimeline('emergency', '驳回应急建议', `${CURRENT_USER} 驳回应急启动建议，理由：${reason}`)
+  addTimeline('system', '通知发送', `通知已发送：提交人 ${p.submitted_by}`, undefined)
+  showRejectProposalModal.value = false
+  message.success('已驳回，事件状态不变，可再次提交')
+}
+
+// ── 签发应急启动令 ──
+function onIssueOrder() {
+  const inc = incident.value
+  const p = pendingProposal.value
+  if (!inc || !p) return
+  p.status = 'approved'
+  p.reviewed_by = CURRENT_USER
+  p.reviewed_at = nowIso()
+  // 未完成任务标记「随事件关闭」
+  const openTasks = tasks.value.filter(t => t.status === 'pending' || t.status === 'submitted')
+  openTasks.forEach(t => { t.status = 'auto_closed' })
+  inc.status = 'transferred'
+  inc.transferred_to_emergency_at = nowIso()
+  touch()
+  addTimeline('emergency', '签发启动令', `${CURRENT_USER} 签发应急启动令，事件移交应急指挥`)
+  if (openTasks.length) addTimeline('task', '任务随事件关闭', `${openTasks.length} 条未完成任务标记为「随事件关闭」，已通知责任人`, undefined)
+  addTimeline('system', '通知发送', 'N8-B 通知已发送：全体配置相关人员', undefined)
+  showIssueOrderModal.value = false
+  message.success('应急启动令已签发')
+}
+
+// ── 升级等级 ──
+const upgradeOptions = computed(() => {
+  const cur = LEVEL_ORDER[incident.value?.level ?? 'IV'] ?? 4
+  return (['I', 'II', 'III'] as const).filter(l => LEVEL_ORDER[l] < cur)
+})
+function openUpgradeModal() {
+  upgradeForm.value = { target_level: '', reason: '' }
+  showUpgradeLevelModal.value = true
+}
+function onUpgradeLevel() {
+  const inc = incident.value
+  if (!inc || !inc.level) return
+  const target = upgradeForm.value.target_level as IncidentLevel
+  if (!target || LEVEL_ORDER[target!] >= LEVEL_ORDER[inc.level]) { message.error('请选择更高的等级'); return }
+  const reason = upgradeForm.value.reason.trim()
+  if (!reason) { message.error('请填写升级理由'); return }
+  const old = inc.level
+  const crossedReportThreshold = (target === 'I' || target === 'II') && old !== 'I' && old !== 'II'
+  inc.level = target
+  if (crossedReportThreshold && !inc.report_completed_at) inc.report_deadline_at = calcReportDeadline(target)
+  touch()
+  addTimeline('level', '升级等级', `${CURRENT_USER} 将等级由 ${LEVEL_LABEL[old]} 升至 ${LEVEL_LABEL[target!]}，理由：${reason}`)
+  addTimeline('system', '通知发送', `N3 通知已发送：事件负责人、组长${crossedReportThreshold ? '；已补发上报提醒 N7' : ''}`, undefined)
+  showUpgradeLevelModal.value = false
+  message.success('等级已升级')
+}
+
+// ── 标记上报完成 ──
+function onMarkReported() {
+  const inc = incident.value
+  if (!inc || !inc.level || inc.report_completed_at) return
+  inc.report_completed_at = nowIso()
+  touch()
+  addTimeline('report', '标记上报完成', `${CURRENT_USER} 标记上报完成，N7 提醒停止`)
+  message.success('已标记上报完成')
+}
+</script>
+
+<template>
+  <div v-if="!incident" class="id-not-found">
+    <ExclamationCircleOutlined />
+    <span>事件不存在</span>
+  </div>
+
+  <div v-else class="id-root" :class="{ 'is-bigscreen': isBigscreen }">
+
+    <!-- ═══ 顶部信息条 ═══════════════════════════════════════════════ -->
+    <div class="id-topbar">
+      <button class="id-back-btn" @click="goBack">
+        <ArrowLeftOutlined /> {{ isBigscreen ? '返回驾驶舱' : '返回列表' }}
+      </button>
+      <div class="id-topbar-info">
+        <span class="id-no">{{ incident.incident_no }}</span>
+        <span class="id-title">{{ incident.title }}</span>
+        <span
+          class="id-urgency-dot"
+          :class="incident.urgency === 'urgent' ? 'dot-urgent' : 'dot-normal'"
+          :title="incident.urgency === 'urgent' ? '紧急' : '一般'"
+        />
+        <span
+          v-if="incident.level"
+          class="id-level-badge"
+          :style="{ background: LEVEL_COLOR[incident.level] }"
+        >{{ LEVEL_LABEL[incident.level] }}</span>
+        <span v-else class="id-level-badge" style="background: var(--of-text-quaternary)">待评级</span>
+        <span
+          class="id-status-badge"
+          :style="{ color: STATUS_COLOR[incident.status], borderColor: STATUS_COLOR[incident.status] }"
+        >{{ STATUS_LABEL[incident.status] }}</span>
+        <span v-if="taskProgress.total > 0" class="id-progress-badge">
+          任务 {{ taskProgress.approved }}/{{ taskProgress.total }} 已通过
+        </span>
+        <span v-if="pendingProposal" class="id-proposal-badge">应急建议待审批</span>
+        <template v-if="incident.status === 'pending_level'">
+          <span
+            class="id-deadline-badge"
+            :class="getLevelDeadlineInfo(incident).overdue ? 'dl-overdue' : 'dl-ok'"
+          >
+            <ClockCircleOutlined />
+            {{ getLevelDeadlineInfo(incident).label }}
+          </span>
+        </template>
+      </div>
+      <div class="id-topbar-right">
+        <span class="id-creator">
+          <UserOutlined /> {{ incident.created_by }}
+          &nbsp;·&nbsp;{{ formatDateTime(incident.created_at) }}
+        </span>
+      </div>
+    </div>
+
+    <!-- ═══ 主体三栏 ═══════════════════════════════════════════════════ -->
+    <div class="id-body" :class="{ 'left-collapsed': leftCollapsed }">
+
+      <!-- 左侧面板 -->
+      <div class="id-left">
+        <div class="id-left-toggle" @click="leftCollapsed = !leftCollapsed">
+          <component :is="leftCollapsed ? MenuUnfoldOutlined : MenuFoldOutlined" />
+        </div>
+        <template v-if="!leftCollapsed">
+          <div class="id-left-content">
+            <div class="id-section-label">基本信息</div>
+            <div class="id-info-row">
+              <span class="info-key">事件类型</span>
+              <span class="info-val">{{ incident.incident_type_name }}</span>
+            </div>
+            <div class="id-info-row">
+              <span class="info-key">等级</span>
+              <span class="info-val">
+                <span v-if="incident.level"
+                  class="info-level-dot"
+                  :style="{ background: LEVEL_COLOR[incident.level] }"
+                />
+                {{ incident.level ? LEVEL_LABEL[incident.level] : '待评级' }}
+              </span>
+            </div>
+            <div class="id-info-row">
+              <span class="info-key">营地</span>
+              <span class="info-val">{{ incident.camp_name }}</span>
+            </div>
+            <div class="id-info-row">
+              <span class="info-key">位置坐标</span>
+              <span class="info-val">
+                <template v-if="incident.location_lat && incident.location_lng">
+                  <EnvironmentOutlined style="margin-right: 4px" />
+                  {{ incident.location_lat.toFixed(4) }}°N,
+                  {{ incident.location_lng.toFixed(4) }}°E
+                </template>
+                <span v-else class="info-empty">—（无坐标）</span>
+              </span>
+            </div>
+            <div class="id-info-row">
+              <span class="info-key">来源</span>
+              <span class="info-val">
+                {{ incident.source === 'alert_escalation' ? '预警升级' : '手工录入' }}
+              </span>
+            </div>
+            <div class="id-info-row">
+              <span class="info-key">创建人</span>
+              <span class="info-val">{{ incident.created_by }}</span>
+            </div>
+
+            <!-- 来源预警列表 -->
+            <template v-if="incident.source_alert_nos.length > 0">
+              <div class="id-section-label" style="margin-top: 16px">来源预警</div>
+              <div
+                v-for="no in incident.source_alert_nos"
+                :key="no"
+                class="id-source-alert"
+              >
+                <span class="sa-badge">预警</span>
+                <span class="sa-no" @click.stop="goToAlert(no)">{{ no }}</span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="id-section-label" style="margin-top: 16px">来源预警</div>
+              <div class="info-empty" style="padding: 6px 0; font-size: 12px">—（现场直接录入）</div>
+            </template>
+
+            <!-- 应急建议状态 -->
+            <template v-if="proposal">
+              <div class="id-section-label" style="margin-top: 16px">应急启动建议</div>
+              <div class="id-proposal-card">
+                <div class="pc-status" :class="'ps-' + proposal.status">
+                  {{ proposal.status === 'pending' ? '待组长审批' : proposal.status === 'approved' ? '已批准' : '已驳回' }}
+                </div>
+                <div class="pc-by">{{ proposal.submitted_by }} · {{ relativeTime(proposal.submitted_at) }}</div>
+                <div class="pc-summary">{{ proposal.summary }}</div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- 中央区域 -->
+      <div class="id-center">
+        <!-- 态势地图占位 -->
+        <div class="id-map-placeholder">
+          <div class="map-inner">
+            <EnvironmentOutlined style="font-size: 32px; color: var(--of-text-tertiary)" />
+            <div class="map-label">态势地图</div>
+            <div class="map-sublabel">
+              {{ incident.location_lat && incident.location_lng
+                ? `${incident.location_lat.toFixed(4)}°N, ${incident.location_lng.toFixed(4)}°E`
+                : '事件暂无位置坐标'
+              }}
+            </div>
+            <!-- 事件菱形标记示意 -->
+            <div
+              v-if="incident.location_lat"
+              class="map-incident-marker"
+              :style="{ background: incident.level ? LEVEL_COLOR[incident.level] : '#aaa' }"
+            />
+          </div>
+          <!-- 图层控制按钮组 -->
+          <div class="map-layer-btns">
+            <button class="layer-btn active">事件位置</button>
+            <button class="layer-btn active">周边摄像头</button>
+            <button class="layer-btn active">反无目标</button>
+            <button class="layer-btn">我方无人机</button>
+          </div>
+        </div>
+
+        <!-- 处置任务看板 -->
+        <div class="id-task-board">
+          <div class="tb-header">
+            <span class="tb-title">处置任务看板</span>
+            <span class="tb-count">已通过 {{ taskProgress.approved }} / 共 {{ taskProgress.total }}</span>
+            <button
+              v-if="canCreateTask"
+              class="tb-add-btn"
+              @click="openCreateTaskModal"
+            >
+              <PlusOutlined /> 新增任务
+            </button>
+          </div>
+          <div v-if="tasks.length === 0" class="tb-empty">
+            <span style="color: var(--of-text-tertiary); font-size: 12px">暂无处置任务</span>
+          </div>
+          <div v-else class="tb-list">
+            <div
+              v-for="task in tasks"
+              :key="task.task_id"
+              class="tb-task-row"
+              :class="{ 'task-overdue': isTaskOverdue(task) }"
+            >
+              <div class="tr-left">
+                <span
+                  class="tr-status-dot"
+                  :style="{ background: getTaskStatusColor(task.status) }"
+                />
+                <div class="tr-info">
+                  <div class="tr-title">{{ task.title }}</div>
+                  <div class="tr-meta">
+                    <TeamOutlined />
+                    {{ task.assignee_external_name
+                      ? `${task.assignee_external_name}（外部）`
+                      : task.assignee_name }}
+                    <span class="tr-sep">·</span>
+                    <ClockCircleOutlined />
+                    {{ formatDateTime(task.deadline_at) }}
+                    <span v-if="isTaskOverdue(task)" class="tr-overdue-tag">已逾期</span>
+                  </div>
+                </div>
+              </div>
+              <div class="tr-right">
+                <span
+                  class="tr-status-tag"
+                  :style="{ color: getTaskStatusColor(task.status), borderColor: getTaskStatusColor(task.status) }"
+                >{{ getTaskStatusLabel(task.status) }}</span>
+                <template v-if="!isBigscreen && task.status === 'pending'">
+                  <button class="tr-action-btn" @click="openSubmitTaskModal(task)">
+                    提交验收
+                  </button>
+                </template>
+                <template v-if="!isBigscreen && task.status === 'submitted'">
+                  <button class="tr-action-btn tr-btn-verify" @click="openVerifyTaskModal(task)">
+                    验收
+                  </button>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧5Tab面板 -->
+      <div class="id-right">
+        <div class="id-right-tabs">
+          <div
+            v-for="tab in [
+              { key: 'summary',  label: '概要' },
+              { key: 'evidence', label: '证据' },
+              { key: 'tasks',    label: '处置' },
+              { key: 'timeline', label: '时间线' },
+              { key: 'report',   label: '上报' },
+            ]"
+            :key="tab.key"
+            class="id-rtab"
+            :class="{ active: rightTab === tab.key }"
+            @click="rightTab = tab.key as any"
+          >{{ tab.label }}</div>
+        </div>
+
+        <div class="id-right-content">
+
+          <!-- 概要 Tab -->
+          <template v-if="rightTab === 'summary'">
+            <div class="rt-section-label">事件描述</div>
+            <div class="rt-description">{{ incident.description || '—' }}</div>
+
+            <div class="rt-section-label" style="margin-top: 16px">基本信息摘要</div>
+            <div class="rt-info-grid">
+              <div class="rtg-row"><span class="rtg-k">编号</span><span class="rtg-v">{{ incident.incident_no }}</span></div>
+              <div class="rtg-row"><span class="rtg-k">类型</span><span class="rtg-v">{{ incident.incident_type_name }}</span></div>
+              <div class="rtg-row"><span class="rtg-k">等级</span>
+                <span class="rtg-v">
+                  <span v-if="incident.level" class="info-level-dot" :style="{ background: LEVEL_COLOR[incident.level] }" />
+                  {{ incident.level ? LEVEL_LABEL[incident.level] : '待评级' }}
+                </span>
+              </div>
+              <div class="rtg-row"><span class="rtg-k">营地</span><span class="rtg-v">{{ incident.camp_name }}</span></div>
+              <div class="rtg-row"><span class="rtg-k">紧急度</span><span class="rtg-v">{{ incident.urgency === 'urgent' ? '🔴 紧急' : '⚪ 一般' }}</span></div>
+              <div class="rtg-row"><span class="rtg-k">创建人</span><span class="rtg-v">{{ incident.created_by }}</span></div>
+              <div class="rtg-row"><span class="rtg-k">创建时间</span><span class="rtg-v">{{ formatDateTime(incident.created_at) }}</span></div>
+              <template v-if="incident.level_confirmed_at">
+                <div class="rtg-row"><span class="rtg-k">评级时间</span><span class="rtg-v">{{ formatDateTime(incident.level_confirmed_at) }}</span></div>
+                <div class="rtg-row"><span class="rtg-k">评级人</span><span class="rtg-v">{{ incident.level_confirmed_by }}</span></div>
+              </template>
+            </div>
+
+            <template v-if="recommendedMeasures.length > 0">
+              <div class="rt-section-label" style="margin-top: 16px">推荐响应措施</div>
+              <div class="rt-measures">
+                <div
+                  v-for="(m, idx) in recommendedMeasures"
+                  :key="idx"
+                  class="rt-measure-row"
+                >
+                  <a-checkbox />
+                  <span>{{ m }}</span>
+                </div>
+              </div>
+            </template>
+          </template>
+
+          <!-- 证据 Tab -->
+          <template v-else-if="rightTab === 'evidence'">
+            <div class="rt-section-label" style="margin-bottom: 8px">
+              证据材料
+              <button v-if="!isBigscreen" class="rt-add-btn" style="margin-left: auto">
+                <UploadOutlined /> 上传证据
+              </button>
+            </div>
+            <div class="rt-evidence-list">
+              <template v-if="incident.source === 'alert_escalation' && incident.source_alert_nos.length > 0">
+                <div class="ev-item">
+                  <PaperClipOutlined class="ev-icon" />
+                  <div class="ev-info">
+                    <div class="ev-title">来源预警证据快照</div>
+                    <div class="ev-meta">系统自动 · 来自预警升级 · {{ relativeTime(incident.created_at) }}</div>
+                  </div>
+                </div>
+              </template>
+              <div class="ev-empty">
+                <FileTextOutlined style="font-size: 24px; color: var(--of-text-tertiary)" />
+                <div style="color: var(--of-text-tertiary); font-size: 12px; margin-top: 6px">暂无其他证据材料</div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 处置 Tab -->
+          <template v-else-if="rightTab === 'tasks'">
+            <div class="rt-section-label" style="margin-bottom: 8px">
+              处置任务
+              <span v-if="taskProgress.total > 0" style="margin-left: 8px; text-transform: none; letter-spacing: 0">
+                已通过 {{ taskProgress.approved }} / 共 {{ taskProgress.total }}
+              </span>
+              <button
+                v-if="canCreateTask"
+                class="rt-add-btn" style="margin-left: auto"
+                @click="openCreateTaskModal"
+              ><PlusOutlined /> 新增任务</button>
+            </div>
+            <div v-if="tasks.length === 0" class="rt-empty-state">
+              <CheckCircleOutlined style="font-size: 24px; color: var(--of-text-tertiary)" />
+              <div style="color: var(--of-text-tertiary); font-size: 12px; margin-top: 6px">暂无处置任务</div>
+            </div>
+            <div v-else class="rt-task-list">
+              <div
+                v-for="task in tasks"
+                :key="task.task_id"
+                class="rt-task-item"
+                :class="{ 'task-overdue': isTaskOverdue(task) }"
+              >
+                <div class="rti-header">
+                  <span class="rti-title">{{ task.title }}</span>
+                  <span
+                    class="rti-status"
+                    :style="{ color: getTaskStatusColor(task.status) }"
+                  >{{ getTaskStatusLabel(task.status) }}</span>
+                </div>
+                <div class="rti-meta">
+                  <TeamOutlined />
+                  {{ task.assignee_external_name
+                    ? `${task.assignee_external_name}（外部，${task.assignee_external_contact}）`
+                    : task.assignee_name }}
+                </div>
+                <div class="rti-meta">
+                  <ClockCircleOutlined />
+                  截止 {{ formatDateTime(task.deadline_at) }}
+                  <span v-if="isTaskOverdue(task)" class="tr-overdue-tag">已逾期</span>
+                </div>
+                <div v-if="task.acceptance_criteria" class="rti-criteria">
+                  <span class="rti-criteria-label">验收标准：</span>{{ task.acceptance_criteria }}
+                </div>
+                <div v-if="task.action_description" class="rti-action-desc">
+                  <span class="rti-criteria-label">处置说明：</span>{{ task.action_description }}
+                </div>
+                <div v-if="task.rejection_reason" class="rti-rejection">
+                  <CloseCircleOutlined style="color: var(--of-color-error); margin-right: 4px" />
+                  驳回原因：{{ task.rejection_reason }}
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 时间线 Tab -->
+          <template v-else-if="rightTab === 'timeline'">
+            <div class="rt-section-label" style="margin-bottom: 12px">操作时间线</div>
+            <div class="rt-timeline">
+              <div
+                v-for="item in timelines"
+                :key="item.id"
+                class="tl-item"
+              >
+                <div class="tl-dot" :class="'tl-cat-' + item.category" />
+                <div class="tl-body">
+                  <div class="tl-header">
+                    <span class="tl-action">{{ item.action }}</span>
+                    <span v-if="item.operator" class="tl-operator">{{ item.operator }}</span>
+                    <span class="tl-time">{{ relativeTime(item.time) }}</span>
+                  </div>
+                  <div class="tl-content">{{ item.content }}</div>
+                </div>
+              </div>
+              <div v-if="timelines.length === 0" class="rt-empty-state">
+                <div style="color: var(--of-text-tertiary); font-size: 12px">暂无操作记录</div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 上报 Tab -->
+          <template v-else-if="rightTab === 'report'">
+            <div class="rt-section-label" style="margin-bottom: 8px">上报状态</div>
+            <div class="rt-report-card">
+              <template v-if="incident.level && ['I','II'].includes(incident.level)">
+                <div class="rr-row">
+                  <span class="rr-k">上报截止</span>
+                  <span class="rr-v rr-deadline">
+                    {{ incident.report_deadline_at ? formatDateTime(incident.report_deadline_at) : '—' }}
+                  </span>
+                </div>
+                <div class="rr-row">
+                  <span class="rr-k">上报负责人</span>
+                  <span class="rr-v">
+                    <template v-if="editingReportUser">
+                      <a-input
+                        v-model:value="reportUserInput"
+                        size="small"
+                        style="width: 120px"
+                        @keyup.enter="saveReportUser"
+                        @keyup.esc="editingReportUser = false"
+                      />
+                      <a class="rr-save-link" @click="saveReportUser">保存</a>
+                      <a class="rr-cancel-link" @click="editingReportUser = false">取消</a>
+                    </template>
+                    <template v-else>
+                      {{ incident.report_responsible_user ?? '—' }}
+                      <a v-if="!isTerminal && !isBigscreen" class="rr-edit-link" @click="startEditReportUser">修改</a>
+                    </template>
+                  </span>
+                </div>
+                <div class="rr-row">
+                  <span class="rr-k">完成状态</span>
+                  <span class="rr-v">
+                    <span v-if="incident.report_completed_at" class="rr-done">
+                      <CheckCircleOutlined /> 已完成（{{ formatDateTime(incident.report_completed_at) }}）
+                    </span>
+                    <span v-else class="rr-pending">
+                      <ClockCircleOutlined /> 待上报
+                    </span>
+                  </span>
+                </div>
+                <div v-if="!incident.report_completed_at && !isTerminal && !isBigscreen" class="rr-action">
+                  <button class="rr-mark-btn" @click="onMarkReported">标记上报完成</button>
+                </div>
+              </template>
+              <template v-else-if="incident.level">
+                <div class="rr-row">
+                  <span class="rr-k">上报截止</span>
+                  <span class="rr-v">{{ incident.report_deadline_at ? formatDateTime(incident.report_deadline_at) : '—' }}</span>
+                </div>
+                <div class="rr-row">
+                  <span class="rr-k">上报负责人</span>
+                  <span class="rr-v">{{ incident.report_responsible_user ?? '—' }}</span>
+                </div>
+                <div class="rr-row">
+                  <span class="rr-k">完成状态</span>
+                  <span class="rr-v">
+                    <span v-if="incident.report_completed_at" class="rr-done">
+                      <CheckCircleOutlined /> 已完成
+                    </span>
+                    <span v-else class="rr-pending">待上报</span>
+                  </span>
+                </div>
+              </template>
+              <template v-else>
+                <div style="color: var(--of-text-tertiary); font-size: 12px">事件等级确认后自动计算上报截止时间</div>
+              </template>
+            </div>
+          </template>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ 底部操作栏 ═══════════════════════════════════════════════ -->
+    <div class="id-actionbar" v-if="!isTerminal">
+      <div class="ab-left">
+        <span v-if="isBigscreen" class="ab-bs-hint">处置任务、关闭、撤销等操作请在 PC 后台进行</span>
+        <button
+          v-if="availableActions.includes('cancel')"
+          class="ab-btn ab-btn-ghost ab-btn-danger"
+          @click="openCancelModal"
+        >撤销事件</button>
+        <button
+          v-if="availableActions.includes('direct_close')"
+          class="ab-btn ab-btn-ghost"
+          @click="openCloseModal('direct')"
+        >直接关闭</button>
+        <a-tooltip
+          v-if="availableActions.includes('close_in_progress')"
+          :title="canCloseInProgress ? '' : `还有 ${taskProgress.unapproved} 条任务未通过`"
+        >
+          <button
+            class="ab-btn ab-btn-ghost"
+            :class="{ 'ab-btn-disabled': !canCloseInProgress }"
+            :disabled="!canCloseInProgress"
+            @click="openCloseModal('in_progress')"
+          >关闭事件</button>
+        </a-tooltip>
+        <button
+          v-if="availableActions.includes('create_task')"
+          class="ab-btn ab-btn-default"
+          @click="openCreateTaskModal"
+        ><PlusOutlined /> 创建处置任务</button>
+        <button
+          v-if="availableActions.includes('submit_emergency')"
+          class="ab-btn ab-btn-default"
+          @click="openEmergencyModal"
+        ><WarningOutlined /> 提交应急启动建议</button>
+      </div>
+      <div class="ab-right">
+        <button
+          v-if="availableActions.includes('upgrade_level')"
+          class="ab-btn ab-btn-default"
+          @click="openUpgradeModal"
+        >升级等级</button>
+        <template v-if="availableActions.includes('confirm_level')">
+          <button class="ab-btn ab-btn-ghost ab-btn-info" @click="showLevelRef = true">
+            查看分级标准
+          </button>
+          <button class="ab-btn ab-btn-primary" @click="openLevelModal">
+            确认等级
+          </button>
+        </template>
+        <button
+          v-if="availableActions.includes('reject_proposal')"
+          class="ab-btn ab-btn-ghost"
+          @click="openRejectProposalModal"
+        >驳回建议</button>
+        <button
+          v-if="availableActions.includes('issue_order')"
+          class="ab-btn ab-btn-danger"
+          @click="showIssueOrderModal = true"
+        >签发应急启动令</button>
+      </div>
+    </div>
+    <div class="id-actionbar id-actionbar-terminal" v-else>
+      <span class="at-label">
+        <template v-if="incident.status === 'closed'">
+          <CheckCircleOutlined /> 已关闭 · {{ incident.close_reason }}
+        </template>
+        <template v-else-if="incident.status === 'transferred'">
+          <WarningOutlined style="color: #ff4d4f" /> 已转应急 · {{ formatDateTime(incident.transferred_to_emergency_at!) }}
+        </template>
+        <template v-else>
+          <CloseCircleOutlined /> 已撤销 · {{ incident.cancel_reason }}
+        </template>
+      </span>
+    </div>
+
+    <!-- ═══ 弹窗：确认等级 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showLevelModal"
+      title="确认事件等级"
+      ok-text="确认"
+      cancel-text="取消"
+      :width="520"
+      :ok-button-props="{ disabled: !levelForm.selected }"
+      @ok="onConfirmLevel"
+    >
+      <div class="modal-body">
+        <div class="modal-hint" style="justify-content: space-between">
+          <span>事件类型：{{ incident.incident_type_name }}</span>
+          <a class="rr-edit-link" @click="showLevelRef = true">查看分级标准</a>
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">请选择等级（必选）</div>
+        <a-radio-group v-model:value="levelForm.selected" style="display: flex; gap: 16px; margin-top: 8px">
+          <a-radio value="I"><span style="color: #ff4d4f; font-weight: 600">Ⅰ级</span></a-radio>
+          <a-radio value="II"><span style="color: #fa8c16; font-weight: 600">Ⅱ级</span></a-radio>
+          <a-radio value="III"><span style="color: #fadb14; font-weight: 600">Ⅲ级</span></a-radio>
+          <a-radio value="IV"><span style="color: #1890ff; font-weight: 600">Ⅳ级</span></a-radio>
+        </a-radio-group>
+        <div class="modal-field-label" style="margin-top: 16px">
+          定级说明
+          <span class="modal-hint-sm">（选填）</span>
+        </div>
+        <a-textarea
+          v-model:value="levelForm.note"
+          placeholder="可补充定级依据..."
+          :rows="3"
+          style="margin-top: 8px"
+        />
+        <div class="modal-hint-sm" style="margin-top: 8px">注：等级与说明将记录至事件时间线。</div>
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：分级参考标准 ════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showLevelRef"
+      title="分级参考标准"
+      :footer="null"
+      :width="660"
+    >
+      <div class="level-ref-modal">
+        <div class="lrm-tabs">
+          <div
+            v-for="tab in levelRefTabs"
+            :key="tab.key"
+            class="lrm-tab"
+            :class="{ active: activeLevelRefTab === tab.key }"
+            @click="activeLevelRefTab = tab.key"
+          >{{ tab.label }}</div>
+        </div>
+        <div
+          v-for="tab in levelRefTabs"
+          :key="tab.key + '-content'"
+        >
+          <template v-if="activeLevelRefTab === tab.key">
+            <div
+              v-for="lv in tab.levels"
+              :key="lv.level"
+              class="lrm-level-block"
+            >
+              <div class="lrm-level-title">{{ lv.level }}</div>
+              <div class="lrm-level-row"><span class="lrm-k">影响范围：</span>{{ lv.scope }}</div>
+              <div class="lrm-level-row"><span class="lrm-k">人员风险：</span>{{ lv.risk }}</div>
+              <div class="lrm-level-row"><span class="lrm-k">所需资源：</span>{{ lv.resource }}</div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：撤销事件 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showCancelModal"
+      title="撤销事件"
+      ok-text="确认撤销"
+      cancel-text="取消"
+      ok-type="danger"
+      @ok="onCancel"
+    >
+      <div class="modal-body">
+        <div class="modal-hint modal-hint-warn">
+          <ExclamationCircleOutlined /> 撤销后事件状态变为「已撤销」，不可恢复。仅适用于误录或重复录入的情况。
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">撤销原因（必填）</div>
+        <a-textarea
+          v-model:value="cancelForm.reason"
+          placeholder="请填写撤销原因..."
+          :rows="3" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：直接关闭 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showCloseModal"
+      :title="closeMode === 'direct' ? '直接关闭事件' : '关闭事件'"
+      ok-text="确认关闭"
+      cancel-text="取消"
+      @ok="onClose"
+    >
+      <div class="modal-body">
+        <div class="modal-hint">
+          <template v-if="closeMode === 'direct'">适用于现场威胁已即时消除、无需处置任务跟踪的情况。</template>
+          <template v-else>全部 {{ taskProgress.total }} 条处置任务均已通过验收，关闭后事件不可再修改。</template>
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">关闭原因（必填）</div>
+        <a-textarea
+          v-model:value="closeForm.reason"
+          placeholder="请填写关闭原因..."
+          :rows="3" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：新增处置任务 ════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showCreateTaskModal"
+      title="新增处置任务"
+      ok-text="创建任务"
+      cancel-text="取消"
+      :width="520"
+      @ok="onCreateTask"
+    >
+      <a-form layout="vertical" style="margin-top: 16px">
+        <a-form-item label="任务标题" required>
+          <a-input v-model:value="createTaskForm.title" placeholder="请输入任务标题" />
+        </a-form-item>
+        <a-form-item label="验收标准">
+          <a-textarea v-model:value="createTaskForm.acceptance_criteria" :rows="2" placeholder="描述何种情况视为任务完成..." />
+        </a-form-item>
+        <a-form-item label="责任人" required>
+          <a-radio-group v-model:value="createTaskForm.assignee_type" style="margin-bottom: 8px">
+            <a-radio value="platform">平台用户</a-radio>
+            <a-radio value="external">外部联系人</a-radio>
+          </a-radio-group>
+          <a-select
+            v-if="createTaskForm.assignee_type === 'platform'"
+            v-model:value="createTaskForm.assignee_user"
+            placeholder="选择平台用户"
+          >
+            <a-select-option v-for="u in PLATFORM_USERS" :key="u" :value="u">{{ u }}</a-select-option>
+          </a-select>
+          <template v-else>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+              <a-input v-model:value="createTaskForm.external_name" placeholder="姓名（必填）" />
+              <a-input v-model:value="createTaskForm.external_contact" placeholder="联系方式" />
+            </div>
+            <div class="modal-hint-sm" style="margin-top: 4px">外部联系人无平台账号，不接收系统通知，仅作留痕。</div>
+          </template>
+        </a-form-item>
+        <a-form-item label="截止时间" required>
+          <a-date-picker
+            v-model:value="createTaskForm.deadline"
+            show-time style="width: 100%"
+            placeholder="选择截止时间"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- ═══ 弹窗：提交验收 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="submitTaskModalOpen"
+      title="提交处置任务验收"
+      ok-text="提交验收"
+      cancel-text="取消"
+      @ok="onSubmitTask"
+      @cancel="showSubmitTaskModal = null"
+    >
+      <div class="modal-body" style="margin-top: 16px">
+        <div class="modal-field-label">处置措施说明（必填）</div>
+        <a-textarea
+          v-model:value="submitTaskForm.action_description"
+          placeholder="请详细描述已采取的处置措施..."
+          :rows="4" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：验收任务 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showVerifyTaskModal"
+      title="验收处置任务"
+      ok-text="提交验收结果"
+      cancel-text="取消"
+      @ok="onVerifyTask"
+    >
+      <div class="modal-body" style="margin-top: 16px">
+        <div class="modal-field-label">验收结果</div>
+        <a-radio-group v-model:value="verifyTaskForm.passed" style="margin-top: 8px">
+          <a-radio :value="true">通过</a-radio>
+          <a-radio :value="false">驳回</a-radio>
+        </a-radio-group>
+        <template v-if="!verifyTaskForm.passed">
+          <div class="modal-field-label" style="margin-top: 16px">驳回原因（必填）</div>
+          <a-textarea
+            v-model:value="verifyTaskForm.rejection_reason"
+            placeholder="请填写驳回原因..."
+            :rows="3" style="margin-top: 8px"
+          />
+        </template>
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：提交应急启动建议 ════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showEmergencyModal"
+      title="提交应急启动建议"
+      ok-text="提交建议"
+      cancel-text="取消"
+      :width="560"
+      @ok="onSubmitEmergency"
+    >
+      <div class="modal-body" style="margin-top: 16px">
+        <div class="modal-hint">
+          提交后将通知组长审批。审批通过后可签发启动令，事件状态变为「已转应急」。
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">建议摘要（必填）</div>
+        <a-textarea
+          v-model:value="emergencyForm.summary"
+          placeholder="简述启动应急的理由和当前威胁情况..."
+          :rows="3" style="margin-top: 8px"
+        />
+        <div class="modal-field-label" style="margin-top: 16px">建议启动事项</div>
+        <a-textarea
+          v-model:value="emergencyForm.suggested_actions"
+          placeholder="列出建议的具体应急行动..."
+          :rows="4" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：签发启动令 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showIssueOrderModal"
+      title="签发应急启动令"
+      ok-text="确认签发"
+      cancel-text="取消"
+      ok-type="danger"
+      :width="520"
+      @ok="onIssueOrder"
+    >
+      <div class="modal-body">
+        <div class="modal-hint modal-hint-warn" style="font-weight: 600">
+          <ExclamationCircleOutlined />
+          此操作将立即启动应急响应，无法撤回。签发后事件状态变为「已转应急」，平台将向应急指挥模块传递数据包。
+        </div>
+        <template v-if="proposal">
+          <div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 4px">
+            <div style="font-size: 12px; color: var(--of-text-tertiary); margin-bottom: 8px">
+              当前待审批建议（{{ proposal.submitted_by }} · {{ relativeTime(proposal.submitted_at) }}）
+            </div>
+            <div style="font-size: 13px; color: var(--of-text-secondary)">{{ proposal.summary }}</div>
+          </div>
+        </template>
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：升级等级 ════════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showUpgradeLevelModal"
+      title="升级事件等级"
+      ok-text="确认升级"
+      cancel-text="取消"
+      :width="480"
+      @ok="onUpgradeLevel"
+    >
+      <div class="modal-body" style="margin-top: 16px">
+        <div class="modal-hint">
+          当前等级：
+          <strong :style="{ color: incident.level ? LEVEL_COLOR[incident.level] : 'inherit' }">
+            {{ incident.level ? LEVEL_LABEL[incident.level] : '待评级' }}
+          </strong>
+          &nbsp;·&nbsp;等级只能向上升级，降级须关闭当前事件另开新条。
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">升级至</div>
+        <a-select v-model:value="upgradeForm.target_level" style="width: 100%; margin-top: 8px">
+          <a-select-option v-for="lv in upgradeOptions" :key="lv" :value="lv">
+            <span :style="{ color: LEVEL_COLOR[lv], fontWeight: 600 }">
+              {{ LEVEL_LABEL[lv] }}{{ lv === 'I' ? '（最严重）' : '' }}
+            </span>
+          </a-select-option>
+        </a-select>
+        <div v-if="upgradeOptions.length === 0" class="modal-hint-sm" style="margin-top: 4px">
+          当前已是最高等级，不可再升级。
+        </div>
+        <div class="modal-field-label" style="margin-top: 16px">升级理由（必填，将记录至时间线）</div>
+        <a-textarea
+          v-model:value="upgradeForm.reason"
+          placeholder="请说明升级原因..."
+          :rows="3" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+    <!-- ═══ 弹窗：驳回应急建议 ════════════════════════════════════════ -->
+    <a-modal
+      v-model:open="showRejectProposalModal"
+      title="驳回应急启动建议"
+      ok-text="确认驳回"
+      cancel-text="取消"
+      :width="520"
+      @ok="onRejectProposal"
+    >
+      <div class="modal-body" style="margin-top: 16px">
+        <div class="modal-hint">
+          驳回后事件保持当前状态（{{ STATUS_LABEL[incident.status] }}），可再次提交应急启动建议。
+        </div>
+        <template v-if="pendingProposal">
+          <div style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 4px">
+            <div style="font-size: 12px; color: var(--of-text-tertiary); margin-bottom: 8px">
+              待审批建议（{{ pendingProposal.submitted_by }} · {{ relativeTime(pendingProposal.submitted_at) }}）
+            </div>
+            <div style="font-size: 13px; color: var(--of-text-secondary)">{{ pendingProposal.summary }}</div>
+          </div>
+        </template>
+        <div class="modal-field-label" style="margin-top: 16px">驳回理由（必填）</div>
+        <a-textarea
+          v-model:value="rejectProposalForm.reason"
+          placeholder="请填写驳回理由..."
+          :rows="3" style="margin-top: 8px"
+        />
+      </div>
+    </a-modal>
+
+  </div>
+</template>
+
+<style scoped lang="scss">
+// ── 顶层容器 ─────────────────────────────────────────────────────
+.id-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--of-bg-body);
+  overflow: hidden;
+}
+
+.id-not-found {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--of-spacing-2);
+  height: 100vh;
+  color: var(--of-text-tertiary);
+  font-size: var(--of-font-size-lg);
+}
+
+// ── 顶部信息条 ──────────────────────────────────────────────────
+.id-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--of-spacing-3);
+  height: 48px;
+  padding: 0 var(--of-spacing-4);
+  background: var(--of-bg-header);
+  border-bottom: 1px solid var(--of-border-table);
+  flex-shrink: 0;
+}
+
+.id-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--of-color-link);
+  cursor: pointer;
+  font-size: var(--of-font-size-base);
+  padding: 4px 8px;
+  border-radius: var(--of-radius-base);
+  white-space: nowrap;
+  transition: color var(--of-transition-base);
+  &:hover { color: var(--of-color-link-hover); }
+}
+
+.id-topbar-info {
+  display: flex;
+  align-items: center;
+  gap: var(--of-spacing-2);
+  flex: 1;
+  overflow: hidden;
+}
+
+.id-no {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.id-title {
+  font-size: var(--of-font-size-base);
+  font-weight: var(--of-font-weight-medium);
+  color: var(--of-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.id-urgency-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  &.dot-urgent { background: var(--of-color-error); }
+  &.dot-normal { background: var(--of-text-quaternary); }
+}
+.id-level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: var(--of-font-weight-bold);
+  color: #fff;
+  flex-shrink: 0;
+}
+.id-status-badge {
+  font-size: var(--of-font-size-xs);
+  border: 1px solid;
+  padding: 1px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.id-progress-badge {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-text-secondary);
+  background: rgba(255,255,255,0.06);
+  padding: 1px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.id-proposal-badge {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-color-error);
+  background: rgba(255,77,79,0.12);
+  border: 1px solid rgba(255,77,79,0.3);
+  padding: 1px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.id-deadline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--of-font-size-xs);
+  padding: 1px 7px;
+  border-radius: 3px;
+  &.dl-overdue { background: rgba(255,77,79,.12); color: var(--of-color-error); }
+  &.dl-ok { background: rgba(250,173,20,.1); color: #faad14; }
+}
+
+.id-topbar-right {
+  margin-left: auto;
+  .id-creator {
+    font-size: var(--of-font-size-xs);
+    color: var(--of-text-tertiary);
+    white-space: nowrap;
+  }
+}
+
+// ── 主体三栏 ──────────────────────────────────────────────────────
+.id-body {
+  display: grid;
+  grid-template-columns: 240px 1fr 360px;
+  flex: 1;
+  overflow: hidden;
+  transition: grid-template-columns var(--of-transition-base);
+
+  &.left-collapsed {
+    grid-template-columns: 28px 1fr 360px;
+  }
+}
+
+// ── 左侧面板 ──────────────────────────────────────────────────────
+.id-left {
+  display: flex;
+  flex-direction: column;
+  background: var(--of-bg-sider);
+  border-right: 1px solid var(--of-border-table);
+  overflow: hidden;
+  position: relative;
+}
+.id-left-toggle {
+  position: absolute;
+  right: 0;
+  top: 12px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--of-text-tertiary);
+  z-index: 1;
+  &:hover { color: var(--of-text-primary); }
+}
+.id-left-content {
+  padding: var(--of-spacing-4) var(--of-spacing-4) var(--of-spacing-4) var(--of-spacing-3);
+  overflow-y: auto;
+  flex: 1;
+}
+.id-section-label {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-text-tertiary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: var(--of-spacing-2);
+}
+.id-info-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 4px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  .info-key { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); }
+  .info-val { font-size: var(--of-font-size-xs); color: var(--of-text-secondary); display: flex; align-items: center; gap: 4px; }
+  .info-empty { color: var(--of-text-quaternary); }
+  .info-level-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+}
+.id-source-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  .sa-badge {
+    font-size: 10px;
+    background: rgba(20,129,166,0.2);
+    color: var(--of-color-primary);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .sa-no { font-size: var(--of-font-size-xs); color: var(--of-color-link); cursor: pointer; &:hover { text-decoration: underline; } }
+}
+.id-proposal-card {
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  padding: 8px;
+  .pc-status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-bottom: 4px;
+    &.ps-pending { background: rgba(250,173,20,0.15); color: #faad14; }
+    &.ps-approved { background: rgba(82,196,26,0.15); color: var(--of-color-success); }
+    &.ps-rejected { background: rgba(255,77,79,0.15); color: var(--of-color-error); }
+  }
+  .pc-by { font-size: 11px; color: var(--of-text-quaternary); margin-bottom: 4px; }
+  .pc-summary { font-size: 12px; color: var(--of-text-secondary); line-height: 1.5; }
+}
+
+// ── 中央区域 ──────────────────────────────────────────────────────
+.id-center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--of-bg-body);
+}
+
+// 地图占位
+.id-map-placeholder {
+  flex: 1;
+  position: relative;
+  background: #0e1a22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--of-border-table);
+  min-height: 0;
+
+  .map-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .map-label { font-size: 14px; color: var(--of-text-tertiary); }
+  .map-sublabel { font-size: 12px; color: var(--of-text-quaternary); }
+  .map-incident-marker {
+    width: 20px;
+    height: 20px;
+    transform: rotate(45deg);
+    border-radius: 2px;
+    margin-top: 8px;
+    box-shadow: 0 0 0 4px rgba(255,255,255,0.1);
+  }
+  .map-layer-btns {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    .layer-btn {
+      background: rgba(22,32,42,0.85);
+      border: 1px solid var(--of-border-table);
+      color: var(--of-text-tertiary);
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all var(--of-transition-base);
+      &.active { border-color: var(--of-color-accent-cyan); color: var(--of-color-accent-cyan); }
+      &:hover { color: var(--of-text-primary); }
+    }
+  }
+}
+
+// 处置任务看板
+.id-task-board {
+  height: 240px;
+  background: var(--of-bg-card);
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--of-border-table);
+  flex-shrink: 0;
+}
+.tb-header {
+  display: flex;
+  align-items: center;
+  gap: var(--of-spacing-2);
+  padding: var(--of-spacing-2) var(--of-spacing-4);
+  border-bottom: 1px solid var(--of-border-table);
+  .tb-title { font-size: var(--of-font-size-base); font-weight: var(--of-font-weight-medium); color: var(--of-text-primary); }
+  .tb-count { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); }
+}
+.tb-add-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(20,129,166,0.15);
+  border: 1px solid rgba(20,129,166,0.4);
+  color: var(--of-color-primary);
+  font-size: var(--of-font-size-xs);
+  padding: 3px 10px;
+  border-radius: var(--of-radius-base);
+  cursor: pointer;
+  &:hover { background: rgba(20,129,166,0.25); }
+}
+.tb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+}
+.tb-list {
+  overflow-y: auto;
+  flex: 1;
+}
+.tb-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--of-spacing-2) var(--of-spacing-4);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background var(--of-transition-base);
+  &:hover { background: var(--of-bg-row-hover); }
+  &.task-overdue { border-left: 2px solid var(--of-color-error); }
+}
+.tr-left {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--of-spacing-2);
+  flex: 1;
+  overflow: hidden;
+}
+.tr-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.tr-info {
+  overflow: hidden;
+  .tr-title { font-size: var(--of-font-size-base); color: var(--of-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tr-meta {
+    font-size: var(--of-font-size-xs);
+    color: var(--of-text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    .tr-sep { color: var(--of-border-table); }
+  }
+}
+.tr-overdue-tag {
+  font-size: 10px;
+  color: var(--of-color-error);
+  background: rgba(255,77,79,0.1);
+  padding: 0 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+}
+.tr-right {
+  display: flex;
+  align-items: center;
+  gap: var(--of-spacing-2);
+  flex-shrink: 0;
+}
+.tr-status-tag {
+  font-size: 11px;
+  border: 1px solid;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.tr-action-btn {
+  background: rgba(20,129,166,0.12);
+  border: 1px solid rgba(20,129,166,0.35);
+  color: var(--of-color-primary);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--of-radius-base);
+  cursor: pointer;
+  white-space: nowrap;
+  &:hover { background: rgba(20,129,166,0.22); }
+  &.tr-btn-verify {
+    background: rgba(155,124,255,0.1);
+    border-color: rgba(155,124,255,0.35);
+    color: #9b7cff;
+    &:hover { background: rgba(155,124,255,0.2); }
+  }
+}
+
+// ── 右侧5Tab面板 ────────────────────────────────────────────────────
+.id-right {
+  display: flex;
+  flex-direction: column;
+  background: var(--of-bg-card);
+  border-left: 1px solid var(--of-border-table);
+  overflow: hidden;
+}
+.id-right-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--of-border-table);
+  flex-shrink: 0;
+
+  .id-rtab {
+    flex: 1;
+    text-align: center;
+    padding: 10px 4px;
+    font-size: 13px;
+    color: var(--of-text-tab-inactive);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color var(--of-transition-base), border-color var(--of-transition-base);
+    &:hover { color: var(--of-text-primary); }
+    &.active {
+      color: var(--of-color-accent-cyan);
+      border-bottom-color: var(--of-color-accent-cyan);
+    }
+  }
+}
+.id-right-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--of-spacing-4);
+}
+
+// 右侧面板通用
+.rt-section-label {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-text-tertiary);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--of-spacing-2);
+}
+.rt-description {
+  font-size: var(--of-font-size-base);
+  color: var(--of-text-secondary);
+  line-height: 1.6;
+}
+.rt-info-grid {
+  .rtg-row {
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 4px;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    .rtg-k { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); }
+    .rtg-v { font-size: var(--of-font-size-xs); color: var(--of-text-secondary); display: flex; align-items: center; gap: 4px; }
+    .info-level-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  }
+}
+.rt-measures {
+  .rt-measure-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--of-spacing-2);
+    padding: 4px 0;
+    font-size: var(--of-font-size-xs);
+    color: var(--of-text-secondary);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+}
+.rt-add-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px dashed var(--of-border-table);
+  color: var(--of-text-tertiary);
+  font-size: var(--of-font-size-xs);
+  padding: 2px 8px;
+  border-radius: var(--of-radius-base);
+  cursor: pointer;
+  &:hover { border-color: var(--of-color-primary); color: var(--of-color-primary); }
+}
+.rt-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+// 证据列表
+.rt-evidence-list {
+  .ev-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--of-spacing-2);
+    padding: var(--of-spacing-2) 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    .ev-icon { font-size: 16px; color: var(--of-color-primary); flex-shrink: 0; margin-top: 2px; }
+    .ev-title { font-size: var(--of-font-size-base); color: var(--of-text-primary); }
+    .ev-meta { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); margin-top: 2px; }
+  }
+  .ev-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 0;
+  }
+}
+
+// 处置任务列表（右侧 Tab）
+.rt-task-list {
+  .rt-task-item {
+    padding: var(--of-spacing-3) 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    &.task-overdue { border-left: 2px solid var(--of-color-error); padding-left: var(--of-spacing-2); }
+
+    .rti-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--of-spacing-2);
+      margin-bottom: 4px;
+    }
+    .rti-title { font-size: var(--of-font-size-base); font-weight: var(--of-font-weight-medium); color: var(--of-text-primary); }
+    .rti-status { font-size: 11px; }
+    .rti-meta {
+      font-size: var(--of-font-size-xs);
+      color: var(--of-text-tertiary);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 3px;
+    }
+    .rti-criteria {
+      font-size: var(--of-font-size-xs);
+      color: var(--of-text-secondary);
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+    .rti-criteria-label { color: var(--of-text-tertiary); }
+    .rti-action-desc {
+      font-size: var(--of-font-size-xs);
+      color: var(--of-text-secondary);
+      margin-top: 4px;
+      padding: 6px 8px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 3px;
+    }
+    .rti-rejection {
+      font-size: var(--of-font-size-xs);
+      color: var(--of-color-error);
+      margin-top: 4px;
+    }
+  }
+}
+
+// 时间线
+.rt-timeline {
+  .tl-item {
+    display: flex;
+    gap: var(--of-spacing-2);
+    padding-bottom: var(--of-spacing-3);
+    position: relative;
+
+    &:not(:last-child) .tl-dot::after {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 12px;
+      width: 1px;
+      bottom: 0;
+      background: var(--of-border-table);
+    }
+  }
+  .tl-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 5px;
+    position: relative;
+    z-index: 1;
+
+    &.tl-cat-system   { background: var(--of-text-quaternary); }
+    &.tl-cat-level    { background: #fa8c16; }
+    &.tl-cat-task     { background: var(--of-color-primary); }
+    &.tl-cat-emergency { background: #ff4d4f; }
+    &.tl-cat-report   { background: var(--of-color-success); }
+    &.tl-cat-manual   { background: var(--of-text-secondary); }
+  }
+  .tl-body { flex: 1; overflow: hidden; }
+  .tl-header {
+    display: flex;
+    align-items: center;
+    gap: var(--of-spacing-2);
+    .tl-action { font-size: var(--of-font-size-xs); font-weight: var(--of-font-weight-medium); color: var(--of-text-primary); }
+    .tl-operator { font-size: var(--of-font-size-xs); color: var(--of-color-link); }
+    .tl-time { font-size: 11px; color: var(--of-text-quaternary); margin-left: auto; white-space: nowrap; }
+  }
+  .tl-content { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); line-height: 1.5; margin-top: 2px; }
+}
+
+// 上报
+.rt-report-card {
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  padding: 12px;
+  .rr-row {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 4px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    .rr-k { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); }
+    .rr-v { font-size: var(--of-font-size-xs); color: var(--of-text-secondary); display: flex; align-items: center; gap: 4px; }
+    .rr-deadline { color: #ff4d4f; }
+    .rr-done { color: var(--of-color-success); display: flex; align-items: center; gap: 4px; }
+    .rr-pending { color: #faad14; display: flex; align-items: center; gap: 4px; }
+  }
+  .rr-action {
+    margin-top: var(--of-spacing-3);
+    .rr-mark-btn {
+      background: rgba(20,129,166,0.15);
+      border: 1px solid rgba(20,129,166,0.4);
+      color: var(--of-color-primary);
+      font-size: var(--of-font-size-xs);
+      padding: 4px 14px;
+      border-radius: var(--of-radius-base);
+      cursor: pointer;
+      &:hover { background: rgba(20,129,166,0.25); }
+    }
+  }
+}
+
+// ── 底部操作栏 ───────────────────────────────────────────────────
+.id-actionbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  padding: 0 var(--of-spacing-4);
+  background: var(--of-bg-header);
+  border-top: 1px solid var(--of-border-table);
+  flex-shrink: 0;
+
+  .ab-left, .ab-right {
+    display: flex;
+    align-items: center;
+    gap: var(--of-spacing-2);
+  }
+}
+// ── 大屏覆盖层差异（PRD-大屏 §2、§4.3）：按钮 ≥48px ─────────────
+.is-bigscreen {
+  .id-actionbar .ab-btn {
+    height: 48px;
+    padding: 0 var(--of-spacing-5, 20px);
+    font-size: var(--of-font-size-lg);
+  }
+  .id-back-btn { min-height: 40px; }
+}
+.ab-bs-hint {
+  font-size: var(--of-font-size-xs);
+  color: var(--of-text-tertiary);
+}
+
+.id-actionbar-terminal {
+  .at-label {
+    font-size: var(--of-font-size-base);
+    color: var(--of-text-secondary);
+    display: flex;
+    align-items: center;
+    gap: var(--of-spacing-2);
+  }
+}
+
+.ab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 var(--of-spacing-4);
+  border-radius: var(--of-radius-base);
+  font-size: var(--of-font-size-base);
+  cursor: pointer;
+  transition: all var(--of-transition-base);
+  border: 1px solid transparent;
+  white-space: nowrap;
+
+  &.ab-btn-primary {
+    background: var(--of-color-primary);
+    color: #fff;
+    &:hover { background: var(--of-color-primary-hover); }
+  }
+  &.ab-btn-default {
+    background: var(--of-bg-btn-default);
+    color: var(--of-text-secondary);
+    border-color: rgba(255,255,255,0.1);
+    &:hover { background: var(--of-bg-btn-default-hover); color: var(--of-text-primary); }
+  }
+  &.ab-btn-ghost {
+    background: transparent;
+    color: var(--of-text-secondary);
+    border-color: rgba(255,255,255,0.15);
+    &:hover { color: var(--of-text-primary); border-color: rgba(255,255,255,0.3); }
+  }
+  &.ab-btn-danger {
+    color: var(--of-color-error);
+    border-color: rgba(255,102,102,0.3);
+    &:hover { background: rgba(255,102,102,0.1); }
+  }
+  &.ab-btn-disabled,
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    &:hover { background: transparent; color: var(--of-text-secondary); border-color: rgba(255,255,255,0.15); }
+  }
+  &.ab-btn-info {
+    color: var(--of-color-accent-cyan);
+    border-color: rgba(109,210,232,0.3);
+    &:hover { background: rgba(109,210,232,0.08); }
+  }
+}
+
+// ── 弹窗内容 ────────────────────────────────────────────────────
+.modal-body {
+  .modal-hint {
+    font-size: var(--of-font-size-base);
+    color: var(--of-text-secondary);
+    background: rgba(255,255,255,0.04);
+    padding: 10px 12px;
+    border-radius: var(--of-radius-base);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .modal-hint-warn {
+    background: rgba(255,173,20,0.08);
+    color: #faad14;
+    border: 1px solid rgba(250,173,20,0.2);
+  }
+  .modal-field-label {
+    font-size: var(--of-font-size-base);
+    color: var(--of-text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .modal-hint-sm {
+    font-size: var(--of-font-size-xs);
+    color: var(--of-text-tertiary);
+    font-weight: var(--of-font-weight-normal);
+  }
+}
+
+// 分级参考标准弹窗
+.level-ref-modal {
+  .lrm-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--of-border-table);
+    margin-bottom: var(--of-spacing-3);
+    .lrm-tab {
+      padding: 8px 16px;
+      font-size: var(--of-font-size-base);
+      color: var(--of-text-tab-inactive);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color var(--of-transition-base), border-color var(--of-transition-base);
+      &:hover { color: var(--of-text-primary); }
+      &.active { color: var(--of-color-accent-cyan); border-bottom-color: var(--of-color-accent-cyan); }
+    }
+  }
+  .lrm-level-block {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    &:last-child { border-bottom: none; }
+    .lrm-level-title {
+      font-size: var(--of-font-size-base);
+      font-weight: var(--of-font-weight-medium);
+      color: var(--of-text-primary);
+      margin-bottom: 6px;
+    }
+    .lrm-level-row {
+      font-size: var(--of-font-size-xs);
+      color: var(--of-text-secondary);
+      line-height: 1.6;
+      .lrm-k { color: var(--of-text-tertiary); }
+    }
+  }
+}
+</style>

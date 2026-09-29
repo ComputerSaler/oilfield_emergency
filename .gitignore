@@ -1,0 +1,36 @@
+# 父目录下的所有文件和目录（除了 prototype-app 和 prototype）
+/*
+!/.gitignore
+!/README.md
+!/prototype-app/
+!/prototype/
+
+# prototype-app 内部排除
+prototype-app/node_modules/
+prototype-app/dist/
+prototype-app/*.local
+prototype-app/.DS_Store
+prototype-app/src/components.d.ts
+
+# prototype-app 交付文档不推送
+prototype-app/PHASE*.md
+prototype-app/HANDOFF*.md
+prototype-app/*_DELIVERY.md
+prototype-app/*_COMPLETE.md
+prototype-app/*_IMPLEMENTATION.md
+prototype-app/*_TEST.md
+prototype-app/*_UPDATES.md
+prototype-app/*_FIXED.md
+prototype-app/SESSION_*.md
+prototype-app/VIDEO_*.md
+prototype-app/CNEST_*.md
+prototype-app/EQUIPMENT_*.md
+prototype-app/ALERT_*.md
+prototype-app/WBS.md
+prototype-app/PROTOTYPE_SUMMARY.md
+
+# prototype 内部排除
+prototype/backup/
+prototype/PROTOTYPE-HANDOFF.md
+prototype/*.bak*
+prototype/*.v[0-9]*.md
