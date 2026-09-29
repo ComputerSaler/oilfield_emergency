@@ -9,25 +9,33 @@
 
 ## 快速开始
 
-### 查看交互原型
+### 1. 克隆仓库
+```bash
+git clone https://gitee.com/Bill_Gao/oilfield_emergency.git
+cd oilfield_emergency
+```
 
+### 2. 启动原型
 ```bash
 cd prototype-app
 npm install
 npm run dev
-# 访问 http://127.0.0.1:5180/
 ```
 
-详细说明请查看 [`prototype-app/README.md`](./prototype-app/README.md)
+### 3. 浏览器访问
+访问 http://127.0.0.1:5180/
 
-### 查看产品文档
+首次访问建议查看 `#/style-guide` 设计规范页面
 
-所有 PRD 文档位于 `prototype/` 目录，按模块命名：
+### 4. 查看 PRD 文档
+所有产品文档在 `prototype/` 目录，按模块分类：
 - 人员管理系列
 - 装备管理系列
 - 实时监控中心系列
 - 预警/事件管理系列
 - 等
+
+更多技术细节请查看 [`prototype-app/README.md`](./prototype-app/README.md)
 
 ## 环境要求
 
