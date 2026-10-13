@@ -1,7 +1,6 @@
 ﻿<script setup lang="ts">
 /**
  * 预警规则配置 —— PRD-预警管理-预警规则配置 V1.0
- * 架构：单页 6-Tab（类型与映射 / 合并与紧急度 / 时限与复核 / 研判参数 / 字典 / 通知配置）
  */
 import { ref, reactive, computed } from 'vue'
 import {
@@ -129,7 +128,6 @@ const mergeRules = reactive<MergeRule[]>([
   { typeKey: 'night-light', typeLabel: '夜间异常光源', category: '治安事件', windowN: 10, distanceM: 300, urgency: 'normal' },
 ])
 
-// ==================== Tab3: 时限与复核 ====================
 
 const timeLimits = reactive({
   urgentVerify: 5, normalVerify: 30,
@@ -183,10 +181,7 @@ interface NotifyNode {
 
 const notifyNodes = reactive<NotifyNode[]>([
   { id: 'n1', label: '新预警待核实', required: true, recipients: [{ type: 'shift', label: '今日值班（指挥中心值班）' }] },
-  { id: 'n2', label: '待核实超时', required: false, recipients: [{ type: 'shift', label: '今日值班（安保负责人）' }, { type: 'fixed', label: '张某某' }] },
   { id: 'n3', label: '待决策', required: false, recipients: [{ type: 'shift', label: '今日值班（安保负责人）' }] },
-  { id: 'n4', label: '待决策超时', required: false, recipients: [{ type: 'shift', label: '今日值班（安保负责人）' }] },
-  { id: 'n5', label: '复核到期', required: false, recipients: [{ type: 'shift', label: '今日值班（安保负责人）' }] },
   { id: 'n6', label: '核实任务已回填', required: false, recipients: [{ type: 'auto', label: '任务下发人（自动）' }] },
   { id: 'n7', label: '出现疑似关联预警', required: false, recipients: [{ type: 'shift', label: '今日值班（指挥中心值班）' }] },
 ])
@@ -262,7 +257,6 @@ const auditLogs = reactive<Record<string, LogEntry[]>>({
     { time: '2026-09-20 10:10', operator: '王大伟', action: '新增误报原因', detail: '「动物或天气干扰」' },
   ],
   'notify': [
-    { time: '2026-09-19 08:50', operator: '张明远', action: '修改接收人', detail: '待核实超时：添加固定人员「张某某」' },
   ],
 })
 
@@ -506,7 +500,6 @@ function toggleDictStatus(item: DictItem) {
         v-for="tab in [
           { key: 'type-mapping', label: '类型与映射' },
           { key: 'merge-urgency', label: '合并与紧急度' },
-          { key: 'time-review', label: '时限与复核' },
           { key: 'investigation', label: '研判参数' },
           { key: 'dictionary', label: '字典' },
           { key: 'notify', label: '通知配置' },
@@ -663,7 +656,6 @@ function toggleDictStatus(item: DictItem) {
       </PanelCard>
     </template>
 
-    <!-- ======== Tab3: 时限与复核 ======== -->
     <template v-if="activeTab === 'time-review'">
       <PanelCard>
         <div class="card-header"><span class="card-title">状态时限（分钟）</span></div>

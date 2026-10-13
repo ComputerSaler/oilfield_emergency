@@ -12,7 +12,6 @@ import {
   PlusOutlined,
   DownloadOutlined,
   ReloadOutlined,
-  ClockCircleOutlined,
   ExclamationCircleOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons-vue'
@@ -20,7 +19,6 @@ import PageContainer from '@/components/PageContainer.vue'
 import PanelCard from '@/components/PanelCard.vue'
 import {
   ALERT_RECORDS,
-  getDeadlineInfo,
   SOURCE_LABEL,
   STATUS_LABEL,
   type AlertRecord,
@@ -42,7 +40,6 @@ const query = ref({
   urgency: undefined as AlertUrgency | undefined,   // 必须是 undefined，空字符串会让 placeholder 不显示
   dateRange: null as null | [any, any],
   endStatus: [] as string[],
-  overdueOnly: false,
 })
 
 // ==================== 数据计算 ====================
@@ -50,8 +47,7 @@ const query = ref({
 /** Tab 计数 */
 const tabCounts = computed(() => {
   const pending = ALERT_RECORDS.filter(r =>
-    ['pending_verify', 'pending_decision'].includes(r.status) ||
-    (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+    ['pending_verify', 'pending_decision', 'tracking'].includes(r.status)
   ).length
   const verify = ALERT_RECORDS.filter(r => r.status === 'pending_verify').length
   const decision = ALERT_RECORDS.filter(r => r.status === 'pending_decision').length
@@ -62,19 +58,6 @@ const tabCounts = computed(() => {
   return { pending, verify, decision, tracking, ended }
 })
 
-/** 判断已结束预警在处理时是否已超时 */
-function wasOverdue(record: AlertRecord): boolean {
-  if (record.status === 'false_alarm' && record.verification_at) {
-    const deadline = new Date(record.created_at).getTime() + record.verify_deadline_min * 60 * 1000
-    return new Date(record.verification_at).getTime() > deadline
-  }
-  if (['resolved', 'escalated', 'merged'].includes(record.status) && record.decision_at && record.verification_at) {
-    const deadline = new Date(record.verification_at).getTime() + record.decision_deadline_min * 60 * 1000
-    return new Date(record.decision_at).getTime() > deadline
-  }
-  return false
-}
-
 /** 按 Tab 和筛选条件过滤 */
 const filtered = computed(() => {
   const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
@@ -83,8 +66,7 @@ const filtered = computed(() => {
   let list = ALERT_RECORDS.filter(r => {
     switch (activeTab.value) {
       case 'pending':
-        return ['pending_verify', 'pending_decision'].includes(r.status) ||
-          (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+        return ['pending_verify', 'pending_decision', 'tracking'].includes(r.status)
       case 'pending_verify': return r.status === 'pending_verify'
       case 'pending_decision': return r.status === 'pending_decision'
       case 'tracking': return r.status === 'tracking'
@@ -134,28 +116,18 @@ const filtered = computed(() => {
   if (activeTab.value === 'ended') {
     if (query.value.endStatus.length)
       list = list.filter(r => query.value.endStatus.includes(r.status))
-    if (query.value.overdueOnly)
-      list = list.filter(r => wasOverdue(r))
   }
 
-  // 持续跟踪中 Tab：复核到期 → 跟踪时长降序（created_at 越早跟踪越久）
+  // 持续跟踪中 Tab：跟踪时长降序（created_at 越早越靠前）
   if (activeTab.value === 'tracking') {
     return [...list].sort((a, b) => {
-      const da = getDeadlineInfo(a)
-      const db = getDeadlineInfo(b)
-      if (da.overdue !== db.overdue) return da.overdue ? -1 : 1
       return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     })
   }
 
-  // 其余 Tab：紧急 > 超时 > 有关联 > 时间倒序
+  // 其余 Tab：紧急 > 时间倒序
   return [...list].sort((a, b) => {
-    const da = getDeadlineInfo(a)
-    const db = getDeadlineInfo(b)
     if (a.urgency !== b.urgency) return a.urgency === 'urgent' ? -1 : 1
-    if (da.overdue !== db.overdue) return da.overdue ? -1 : 1
-    if (a.related_alert_ids.length !== b.related_alert_ids.length)
-      return b.related_alert_ids.length - a.related_alert_ids.length
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 })
@@ -171,7 +143,6 @@ function onReset() {
     urgency: undefined,
     dateRange: null,
     endStatus: [],
-    overdueOnly: false,
   }
 }
 
@@ -370,10 +341,6 @@ function onCreateSubmit() {
             <a-select-option value="resolved">已解除</a-select-option>
             <a-select-option value="escalated">已升级</a-select-option>
           </a-select>
-
-          <a-checkbox v-model:checked="query.overdueOnly" class="overdue-check">
-            仅看超时处理
-          </a-checkbox>
         </template>
 
         <div class="filter-actions">
@@ -421,7 +388,6 @@ function onCreateSubmit() {
         <span class="col-source">来源</span>
         <span class="col-camp">营地</span>
         <span class="col-status">状态</span>
-        <span class="col-deadline">时限</span>
         <span class="col-action">操作</span>
       </div>
 
@@ -433,7 +399,6 @@ function onCreateSubmit() {
           class="aw-row"
           :class="{
             'row-urgent': record.urgency === 'urgent',
-            'row-overdue': getDeadlineInfo(record).overdue,
             'row-ended': ['false_alarm','merged','resolved','escalated'].includes(record.status),
           }"
           @click="onInvestigate(record)"
@@ -447,11 +412,10 @@ function onCreateSubmit() {
           <span class="col-info">
             <div class="info-name">
               {{ record.alert_name }}
-              <span v-if="record.related_alert_ids.length" class="related-hint">
-                <ExclamationCircleOutlined /> 疑似关联
+              <span v-if="record.status === 'merged' && record.merged_into_alert_id" class="merged-target">
+                → {{ record.merged_into_alert_id }}
               </span>
               <span v-if="record.trigger_count > 1" class="trigger-count">×{{ record.trigger_count }}</span>
-              <span v-if="record.location_source === 'none'" class="location-tag">待定位</span>
             </div>
             <div class="info-meta">
               <span class="alert-no">{{ record.alert_no }}</span>
@@ -480,23 +444,6 @@ function onCreateSubmit() {
             <span v-if="record.verification_result" class="verify-result-hint">
               {{ record.verification_result === 'real' ? '已核实·真实' : '已核实·无法确认' }}
             </span>
-          </span>
-
-          <!-- 时限 -->
-          <span class="col-deadline">
-            <template v-if="!['false_alarm','merged','resolved','escalated'].includes(record.status)">
-              <ClockCircleOutlined
-                :style="{ color: getDeadlineInfo(record).overdue ? 'var(--of-color-error)' : getDeadlineInfo(record).minutesLeft <= 5 ? '#faad14' : 'var(--of-text-tertiary)' }"
-              />
-              <span
-                class="deadline-text"
-                :class="{
-                  'deadline-overdue': getDeadlineInfo(record).overdue,
-                  'deadline-warn': !getDeadlineInfo(record).overdue && getDeadlineInfo(record).minutesLeft <= 5,
-                }"
-              >{{ getDeadlineInfo(record).label }}</span>
-            </template>
-            <span v-else class="deadline-text" style="color: var(--of-text-quaternary)">—</span>
           </span>
 
           <!-- 操作 -->
@@ -678,17 +625,6 @@ function onCreateSubmit() {
   }
 }
 
-.overdue-check {
-  font-size: var(--of-font-size-xs);
-  color: var(--of-text-secondary);
-  white-space: nowrap;
-
-  :deep(.ant-checkbox-inner) {
-    background: transparent;
-    border-color: var(--of-border-table);
-  }
-}
-
 // ── Tab ─────────────────────────────────────────────────────────
 .aw-tabs {
   display: flex;
@@ -745,7 +681,6 @@ function onCreateSubmit() {
 .col-source   { @extend %col-base; width: 110px; color: var(--of-text-tertiary); font-size: var(--of-font-size-xs); }
 .col-camp     { @extend %col-base; width: 130px; flex-direction: column; align-items: flex-start; gap: 2px; }
 .col-status   { @extend %col-base; width: 160px; flex-direction: column; align-items: flex-start; gap: 3px; }
-.col-deadline { @extend %col-base; width: 130px; gap: 5px; }
 .col-action   { @extend %col-base; width: 64px; justify-content: center; }
 
 // ── 列表头 ──────────────────────────────────────────────────────
@@ -793,10 +728,6 @@ function onCreateSubmit() {
   }
 
   &.row-urgent::before { background: rgba(255,102,102,0.5); }
-  &.row-overdue {
-    background: rgba(255,102,102,0.04);
-    &::before { background: var(--of-color-error); }
-  }
   &.row-ended { opacity: 0.7; }
   &.row-ended:hover { opacity: 1; }
 }
@@ -836,10 +767,12 @@ function onCreateSubmit() {
   max-width: 100%;
 }
 
-.related-hint {
+.merged-target {
   font-size: 11px;
-  color: #faad14;
-  white-space: nowrap;
+  padding: 0 5px;
+  background: var(--of-bg-elevated);
+  color: var(--of-text-tertiary);
+  border-radius: 3px;
 }
 
 .trigger-count {
@@ -847,14 +780,6 @@ function onCreateSubmit() {
   padding: 0 5px;
   background: rgba(20,129,166,0.2);
   color: var(--of-color-link);
-  border-radius: 3px;
-}
-
-.location-tag {
-  font-size: 11px;
-  padding: 0 5px;
-  background: rgba(255,102,102,0.12);
-  color: var(--of-color-error);
   border-radius: 3px;
 }
 
@@ -887,15 +812,6 @@ function onCreateSubmit() {
 .verify-result-hint {
   font-size: 11px;
   color: var(--of-text-tertiary);
-}
-
-.deadline-text {
-  font-size: var(--of-font-size-xs);
-  color: var(--of-text-tertiary);
-  font-variant-numeric: tabular-nums;
-
-  &.deadline-overdue { color: var(--of-color-error); font-weight: var(--of-font-weight-medium); }
-  &.deadline-warn { color: #faad14; }
 }
 
 .btn-investigate {

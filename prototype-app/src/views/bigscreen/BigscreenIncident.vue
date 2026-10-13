@@ -9,7 +9,6 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowLeftOutlined,
-  ClockCircleOutlined,
   SoundOutlined,
   UserOutlined,
   WarningOutlined,
@@ -25,7 +24,6 @@ import {
   MenuUnfoldOutlined,
   RocketOutlined,
   CloseCircleOutlined,
-  PauseOutlined,
   SendOutlined,
   FileAddOutlined,
   MergeCellsOutlined,
@@ -35,7 +33,6 @@ import {
 import {
   ALERT_RECORDS,
   ALERT_TIMELINES,
-  getDeadlineInfo,
   SOURCE_LABEL,
   STATUS_LABEL,
   type AlertRecord,
@@ -89,18 +86,14 @@ const todayMs = today.getTime()
 
 const kpi = computed(() => {
   const pending = ALERT_RECORDS.filter(r =>
-    ['pending_verify', 'pending_decision'].includes(r.status) ||
-    (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+    ['pending_verify', 'pending_decision', 'tracking'].includes(r.status)
   ).length
   const tracking = ALERT_RECORDS.filter(r => r.status === 'tracking').length
   const todayNew = ALERT_RECORDS.filter(r => new Date(r.created_at).getTime() >= todayMs).length
   const todayFalseAlarm = ALERT_RECORDS.filter(r =>
     r.status === 'false_alarm' && new Date(r.created_at).getTime() >= todayMs
   ).length
-  const overdue = ALERT_RECORDS.filter(r =>
-    ['pending_verify', 'pending_decision'].includes(r.status) && getDeadlineInfo(r).overdue
-  ).length
-  return { pending, tracking, todayNew, todayFalseAlarm, overdue }
+  return { pending, tracking, todayNew, todayFalseAlarm }
 })
 
 // ==================== 漏斗数据 ====================
@@ -127,8 +120,7 @@ const listRecords = computed(() => {
   switch (listTab.value) {
     case 'pending':
       list = ALERT_RECORDS.filter(r =>
-        ['pending_verify', 'pending_decision'].includes(r.status) ||
-        (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+        ['pending_verify', 'pending_decision', 'tracking'].includes(r.status)
       )
       break
     case 'tracking':
@@ -142,19 +134,16 @@ const listRecords = computed(() => {
       break
     default: list = []
   }
-  // 排序：紧急 > 超时 > 时间倒序
+  // 排序：紧急 > 时间倒序
   return [...list].sort((a, b) => {
     if (a.urgency !== b.urgency) return a.urgency === 'urgent' ? -1 : 1
-    const da = getDeadlineInfo(a), db = getDeadlineInfo(b)
-    if (da.overdue !== db.overdue) return da.overdue ? -1 : 1
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 })
 
 const listTabCounts = computed(() => ({
   pending: ALERT_RECORDS.filter(r =>
-    ['pending_verify', 'pending_decision'].includes(r.status) ||
-    (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+    ['pending_verify', 'pending_decision', 'tracking'].includes(r.status)
   ).length,
   tracking: ALERT_RECORDS.filter(r => r.status === 'tracking').length,
   ended: ALERT_RECORDS.filter(r =>
@@ -365,8 +354,7 @@ function confirmSwitch() {
 // 面板内待办队列
 const panelPendingList = computed(() =>
   ALERT_RECORDS.filter(r =>
-    (['pending_verify', 'pending_decision'].includes(r.status) ||
-     (r.status === 'tracking' && getDeadlineInfo(r).overdue)) &&
+    ['pending_verify', 'pending_decision', 'tracking'].includes(r.status) &&
     r.alert_id !== panelCurrentId.value
   ).slice(0, 20)
 )
@@ -408,9 +396,6 @@ const pMergeTargets = computed(() =>
 
 const panelIsTerminal = computed(() =>
   ['false_alarm', 'merged', 'resolved', 'escalated'].includes(panelCurrent.value?.status ?? '')
-)
-const panelIsReviewDue    = computed(() =>
-  panelCurrent.value?.status === 'tracking' && getDeadlineInfo(panelCurrent.value!).overdue
 )
 
 // 状态颜色映射
@@ -541,10 +526,6 @@ function toMapY(lat: number, h: number) {
             <div class="kpi-value">{{ kpi.todayFalseAlarm }}</div>
             <div class="kpi-label">今日误报</div>
           </div>
-          <div class="kpi-card" :class="{ 'kpi-warn': kpi.overdue > 0 }">
-            <div class="kpi-value">{{ kpi.overdue }}</div>
-            <div class="kpi-label">超时未处理</div>
-          </div>
         </div>
 
         <!-- 处置漏斗 -->
@@ -614,7 +595,6 @@ function toMapY(lat: number, h: number) {
               class="al-row"
               :class="{
                 'row-urgent': rec.urgency === 'urgent',
-                'row-overdue': getDeadlineInfo(rec).overdue,
                 'row-ended': ['false_alarm','merged','resolved','escalated'].includes(rec.status),
               }"
               @click="openPanel(rec.alert_id)"
@@ -623,9 +603,6 @@ function toMapY(lat: number, h: number) {
               <div class="al-info">
                 <div class="al-name">{{ rec.camp_name }} · {{ rec.alert_type_name }}</div>
                 <div class="al-meta">{{ rec.alert_no }} · {{ SOURCE_LABEL[rec.source_type] }} · {{ relativeTime(rec.created_at) }}</div>
-              </div>
-              <div class="al-deadline" :class="{ 'dl-overdue': getDeadlineInfo(rec).overdue }">
-                {{ getDeadlineInfo(rec).label }}
               </div>
               <button class="al-btn" @click.stop="openPanel(rec.alert_id)">研判</button>
             </div>
@@ -914,12 +891,6 @@ function toMapY(lat: number, h: number) {
           <span class="panel-status" :style="{ borderColor: statusColor[panelCurrent.status], color: statusColor[panelCurrent.status] }">
             {{ STATUS_LABEL[panelCurrent.status] }}
           </span>
-          <template v-if="!panelIsTerminal">
-            <ClockCircleOutlined :style="{ color: getDeadlineInfo(panelCurrent).overdue ? 'var(--of-color-error)' : 'var(--of-text-tertiary)' }" />
-            <span class="panel-deadline" :class="{ overdue: getDeadlineInfo(panelCurrent).overdue }">
-              {{ getDeadlineInfo(panelCurrent).label }}
-            </span>
-          </template>
         </div>
       </div>
 
@@ -942,16 +913,12 @@ function toMapY(lat: number, h: number) {
               v-for="item in panelPendingList"
               :key="item.alert_id"
               class="pq-item"
-              :class="{ 'pq-overdue': getDeadlineInfo(item).overdue }"
               @click="switchPanel(item.alert_id)"
             >
               <span class="pq-dot" :class="item.urgency === 'urgent' ? 'dot-urgent' : 'dot-normal'" />
               <div class="pq-info">
                 <div class="pq-name">{{ item.alert_type_name }}</div>
                 <div class="pq-camp">{{ item.camp_name }}</div>
-              </div>
-              <div class="pq-dl" :class="{ overdue: getDeadlineInfo(item).overdue }">
-                {{ getDeadlineInfo(item).label }}
               </div>
             </div>
           </div>
@@ -1092,11 +1059,6 @@ function toMapY(lat: number, h: number) {
           </a-button>
           <a-button size="large" class="act-btn" @click="pTrackAppendVisible = true" v-if="panelCurrent.status === 'tracking'">
             <template #icon><EditOutlined /></template>追加跟踪记录
-          </a-button>
-          <a-button
-            v-if="panelIsReviewDue" size="large" class="act-btn act-warn"
-          >
-            <template #icon><PauseOutlined /></template>复核
           </a-button>
           <a-button size="large" type="primary" class="act-btn act-primary" @click="pDecideVisible = true">
             <template #icon><SendOutlined /></template>
@@ -1385,7 +1347,6 @@ function toMapY(lat: number, h: number) {
   &::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: transparent; transition: background var(--of-transition-base); }
   &:hover { background: var(--of-bg-row-hover); &::before { background: var(--of-color-primary); } }
   &.row-urgent::before { background: rgba(255,102,102,0.5); }
-  &.row-overdue { background: rgba(255,102,102,0.04); &::before { background: var(--of-color-error); } }
   &.row-ended { opacity: 0.6; }
 }
 .al-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; &.dot-urgent { background: var(--of-color-error); box-shadow: 0 0 0 3px rgba(255,102,102,0.2); animation: pulse-dot 2s infinite; } &.dot-normal { background: var(--of-text-quaternary); } }
@@ -1394,7 +1355,7 @@ function toMapY(lat: number, h: number) {
 .al-name    { font-size: var(--of-font-size-xs); color: var(--of-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .al-meta    { font-size: 11px; color: var(--of-text-quaternary); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .al-deadline { flex-shrink: 0; font-size: 11px; color: var(--of-text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; &.dl-overdue { color: var(--of-color-error); font-weight: var(--of-font-weight-medium); } }
-.al-btn { flex-shrink: 0; background: rgba(20,129,166,0.15); border: 1px solid rgba(20,129,166,0.3); color: var(--of-color-link); font-size: 11px; padding: 2px 8px; border-radius: var(--of-radius-base); cursor: pointer; &:hover { background: rgba(20,129,166,0.25); } }
+
 .al-overflow, .al-empty { text-align: center; padding: var(--of-spacing-4); font-size: var(--of-font-size-xs); color: var(--of-text-quaternary); }
 
 // 中央地图区
@@ -1487,7 +1448,6 @@ function toMapY(lat: number, h: number) {
 .panel-urgency { font-size: var(--of-font-size-xs); padding: 1px 7px; border-radius: 3px; white-space: nowrap; &.badge-urgent { background: rgba(255,102,102,0.15); color: var(--of-color-error); } &.badge-normal { background: rgba(255,255,255,0.06); color: var(--of-text-tertiary); } }
 .panel-right  { display: flex; align-items: center; gap: var(--of-spacing-2); flex-shrink: 0; }
 .panel-status { font-size: var(--of-font-size-xs); padding: 1px 8px; border: 1px solid; border-radius: 3px; white-space: nowrap; }
-.panel-deadline { font-size: var(--of-font-size-xs); color: var(--of-text-tertiary); font-variant-numeric: tabular-nums; &.overdue { color: var(--of-color-error); font-weight: var(--of-font-weight-medium); } }
 .panel-body { flex: 1; display: grid; grid-template-columns: 280px 1fr 420px; overflow: hidden; }
 
 // 待办队列
@@ -1497,12 +1457,11 @@ function toMapY(lat: number, h: number) {
 .pq-count  { background: rgba(255,102,102,0.2); color: var(--of-color-error); border-radius: 3px; padding: 0 5px; font-size: 11px; margin-left: 4px; }
 .pq-collapse { background: none; border: none; color: var(--of-text-tertiary); cursor: pointer; font-size: 14px; &:hover { color: var(--of-text-primary); } }
 .pq-list { flex: 1; overflow-y: auto; }
-.pq-item { display: flex; align-items: center; gap: var(--of-spacing-2); padding: 8px 10px; border-bottom: 1px solid var(--of-border-table); cursor: pointer; &:hover { background: var(--of-bg-row-hover); } &.pq-overdue { background: rgba(255,102,102,0.04); } }
+.pq-item { display: flex; align-items: center; gap: var(--of-spacing-2); padding: 8px 10px; border-bottom: 1px solid var(--of-border-table); cursor: pointer; &:hover { background: var(--of-bg-row-hover); } }
 .pq-dot  { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; &.dot-urgent { background: var(--of-color-error); } &.dot-normal { background: var(--of-text-quaternary); } }
 .pq-info { flex: 1; min-width: 0; }
 .pq-name { font-size: 11px; color: var(--of-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pq-camp { font-size: 11px; color: var(--of-text-quaternary); }
-.pq-dl   { font-size: 11px; color: var(--of-text-tertiary); white-space: nowrap; &.overdue { color: var(--of-color-error); } }
 
 // 面板中央
 .panel-center  { display: flex; flex-direction: column; overflow: hidden; }

@@ -38,8 +38,6 @@ import {
 import {
   ALERT_RECORDS,
   ALERT_TIMELINES,
-  getDeadlineInfo,
-  LOCATION_SOURCE_LABEL,
   SOURCE_LABEL,
   STATUS_LABEL,
   NEARBY_CAMERAS,
@@ -69,11 +67,10 @@ const current = computed<AlertRecord | undefined>(() =>
 
 const timeline = computed(() => ALERT_TIMELINES[currentId.value] ?? [])
 
-// 待办队列：待核实 + 待决策 + 跟踪待复核，最多显示 20 条
+// 待办队列：待核实 + 待决策，最多显示 20 条
 const allPendingList = computed(() =>
   ALERT_RECORDS.filter(r =>
-    ['pending_verify', 'pending_decision'].includes(r.status) ||
-    (r.status === 'tracking' && getDeadlineInfo(r).overdue)
+    ['pending_verify', 'pending_decision'].includes(r.status)
   ).filter(r => r.alert_id !== currentId.value)
 )
 const pendingList = computed(() => allPendingList.value.slice(0, 20))
@@ -332,7 +329,6 @@ const modifyUrgencyVisible = ref(false)   // 修正紧急程度
 const mergeEscalateVisible = ref(false)   // 合并升级为事件
 const relateEventVisible   = ref(false)   // 关联到已有事件
 const trackAppendVisible   = ref(false)   // 追加跟踪记录
-const reviewVisible        = ref(false)   // 复核
 
 // ==================== 表单 ====================
 
@@ -351,7 +347,6 @@ const modifyUrgencyForm = ref({ urgency: '' })
 const mergeEscalateForm = ref({ selectedIds: [] as string[], note: '' })
 const relateEventForm   = ref({ eventNo: '', note: '' })
 const trackAppendForm   = ref({ content: '' })
-const reviewForm        = ref({ action: '' as 'continue' | 'resolve' | 'escalate' | '', note: '' })
 
 // 并入预警候选（待核实且非当前，非终态）
 const mergeTargets = computed(() =>
@@ -685,43 +680,22 @@ function submitTrackAppend() {
   message.success('跟踪记录已追加')
 }
 
-// 提交复核
-function submitReview() {
-  if (!reviewForm.value.action) {
-    message.error('请选择复核决定')
-    return
-  }
-  if (!reviewForm.value.note) {
-    message.error('请填写说明')
-    return
-  }
-  if (!current.value) return
+// ==================== 按钮显隐计算属性 ====================
 
-  if (reviewForm.value.action === 'continue') {
-    current.value.last_review_at = new Date().toISOString()
-    appendTimeline('decision', '复核-继续跟踪', `跟踪说明：${reviewForm.value.note}`)
-    message.success('复核完成，继续跟踪')
-  } else if (reviewForm.value.action === 'resolve') {
-    current.value.status = 'resolved'
-    appendTimeline('decision', '复核-解除预警', `解除说明：${reviewForm.value.note}`)
-    message.success('预警已解除')
-  } else if (reviewForm.value.action === 'escalate') {
-    current.value.status = 'escalated'
-    current.value.escalated_event_id = 'SJ-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-0001'
-    appendTimeline('decision', '复核-升级为事件', `升级说明：${reviewForm.value.note}`)
-    message.success('已升级为事件：' + current.value.escalated_event_id)
-  }
-
-  reviewVisible.value = false
-}
-
-// 打开研判页时追加时间线
-if (current.value && timeline.value.length > 0) {
-  const hasOpenRecord = timeline.value.some(t => t.action === '打开研判页')
-  if (!hasOpenRecord) {
-    appendTimeline('verify', '打开研判页', '张志远 打开研判页')
-  }
-}
+const isTerminal = computed(() =>
+  ['false_alarm', 'merged', 'resolved', 'escalated'].includes(current.value?.status ?? '')
+)
+const showFalseAlarm = computed(() => current.value?.status === 'pending_verify')
+const showMerge      = computed(() => current.value?.status === 'pending_verify')
+const showVerify     = computed(() => current.value?.status === 'pending_verify')
+const showTask       = computed(() =>
+  ['pending_verify', 'pending_decision'].includes(current.value?.status ?? '')
+)
+const showDrone      = computed(() => !isTerminal.value)
+const showDecide     = computed(() =>
+  ['pending_decision', 'tracking'].includes(current.value?.status ?? '')
+)
+const showTrackAppend = computed(() => current.value?.status === 'tracking')
 
 // ==================== 状态颜色 ====================
 
@@ -741,26 +715,6 @@ const timelineCategoryColor: Record<string, string> = {
   decision: '#9b7cff',
   external: '#52c41a',
 }
-
-// ==================== 按钮显隐计算属性 ====================
-
-const isTerminal = computed(() =>
-  ['false_alarm', 'merged', 'resolved', 'escalated'].includes(current.value?.status ?? '')
-)
-const showFalseAlarm = computed(() => current.value?.status === 'pending_verify')
-const showMerge      = computed(() => current.value?.status === 'pending_verify')
-const showVerify     = computed(() => current.value?.status === 'pending_verify')
-const showTask       = computed(() =>
-  ['pending_verify', 'pending_decision'].includes(current.value?.status ?? '')
-)
-const showDrone      = computed(() => !isTerminal.value)
-const showDecide     = computed(() =>
-  ['pending_decision', 'tracking'].includes(current.value?.status ?? '')
-)
-const showTrackAppend = computed(() => current.value?.status === 'tracking')
-const isReviewDue = computed(() =>
-  current.value?.status === 'tracking' && getDeadlineInfo(current.value!).overdue
-)
 </script>
 
 <template>
@@ -791,16 +745,6 @@ const isReviewDue = computed(() =>
         >
           {{ STATUS_LABEL[current.status] }}
         </span>
-
-        <template v-if="!isTerminal">
-          <ClockCircleOutlined
-            :style="{ color: getDeadlineInfo(current).overdue ? 'var(--of-color-error)' : 'var(--of-text-tertiary)' }"
-          />
-          <span
-            class="deadline-tag"
-            :class="{ 'deadline-overdue': getDeadlineInfo(current).overdue }"
-          >{{ getDeadlineInfo(current).label }}</span>
-        </template>
       </div>
     </div>
 
@@ -825,7 +769,6 @@ const isReviewDue = computed(() =>
             v-for="item in pendingList"
             :key="item.alert_id"
             class="queue-item"
-            :class="{ 'item-overdue': getDeadlineInfo(item).overdue }"
             @click="switchTo(item.alert_id)"
           >
             <span class="item-dot" :class="item.urgency === 'urgent' ? 'dot-urgent' : 'dot-normal'" />
@@ -833,10 +776,6 @@ const isReviewDue = computed(() =>
               <div class="item-name">{{ item.alert_type_name }}</div>
               <div class="item-meta">
                 <span>{{ STATUS_LABEL[item.status] }}</span>
-                <span class="dot-sep">·</span>
-                <span :class="{ 'text-overdue': getDeadlineInfo(item).overdue }">
-                  {{ getDeadlineInfo(item).label }}
-                </span>
               </div>
             </div>
           </div>
@@ -1232,7 +1171,6 @@ const isReviewDue = computed(() =>
               { key: 'overview',  label: '概要' },
               { key: 'evidence',  label: '证据' },
               { key: 'timeline',  label: '时间线' },
-              { key: 'related',   label: '关联' },
             ]"
             :key="tab.key"
             class="detail-tab"
@@ -1286,14 +1224,6 @@ const isReviewDue = computed(() =>
                   </span>
                 </div>
                 <div class="info-row">
-                  <span class="info-key">坐标来源</span>
-                  <span class="info-val">{{ LOCATION_SOURCE_LABEL[current.location_source] }}</span>
-                </div>
-                <div class="info-row">
-                  <span class="info-key">生成时间</span>
-                  <span class="info-val">{{ formatDateTime(current.created_at) }}</span>
-                </div>
-                <div class="info-row">
                   <span class="info-key">触发次数</span>
                   <span class="info-val">
                     {{ current.trigger_count }} 次
@@ -1316,65 +1246,11 @@ const isReviewDue = computed(() =>
               </div>
             </section>
 
-            <section class="info-section">
-              <div class="section-title">当前时限</div>
-              <div class="deadline-block" :class="{ 'block-overdue': getDeadlineInfo(current).overdue }">
-                <ClockCircleOutlined />
-                <span class="deadline-main">{{ getDeadlineInfo(current).label }}</span>
-                <span class="deadline-sub">
-                  {{ current.status === 'pending_verify' ? `待核实时限 ${current.verify_deadline_min} 分钟` :
-                     current.status === 'pending_decision' ? `待决策时限 ${current.decision_deadline_min} 分钟` :
-                     current.status === 'tracking' ? `复核周期 ${current.review_interval_hours} 小时` : '' }}
-                </span>
-              </div>
-            </section>
-
             <!-- 自动合并信息 -->
             <section v-if="current.trigger_count > 1" class="info-section">
               <div class="section-title">自动合并</div>
               <div class="merge-info">
                 本预警由 <strong>{{ current.trigger_count }}</strong> 条原始告警合并而来，最后触发时间：{{ relativeTime(current.last_trigger_at) }}
-              </div>
-            </section>
-
-            <!-- 疑似关联预警 -->
-            <section v-if="current.related_alert_ids.length > 0" class="info-section">
-              <div class="section-title">疑似关联预警</div>
-              <div
-                v-for="rid in current.related_alert_ids"
-                :key="rid"
-                class="related-hint-row"
-                @click="activeRightTab = 'related'"
-              >
-                <ExclamationCircleOutlined style="color: #faad14" />
-                与 <span class="text-link mono">{{ ALERT_RECORDS.find(r => r.alert_id === rid)?.alert_no }}</span>
-                可能关联（来源相近），点击关联 Tab 查看
-              </div>
-            </section>
-
-            <section class="info-section">
-              <div class="section-title">周边资源快照
-                <span class="section-hint">生成时刻</span>
-              </div>
-              <div class="snapshot-grid">
-                <div class="snap-card">
-                  <div class="snap-num" :class="{ 'num-ok': current.resource_snapshot.cameras_online > 0 }">
-                    {{ current.resource_snapshot.cameras_online }}
-                  </div>
-                  <div class="snap-label">在线摄像头</div>
-                </div>
-                <div class="snap-card">
-                  <div class="snap-num" :class="{ 'num-ok': current.resource_snapshot.high_cam_aimed }">
-                    {{ current.resource_snapshot.high_cam_aimed ? '是' : '否' }}
-                  </div>
-                  <div class="snap-label">高点已对准</div>
-                </div>
-                <div class="snap-card">
-                  <div class="snap-num" :class="{ 'num-warn': current.resource_snapshot.drones_available === 0 }">
-                    {{ current.resource_snapshot.drones_available }}
-                  </div>
-                  <div class="snap-label">可调度无人机</div>
-                </div>
               </div>
             </section>
           </div>
@@ -1390,15 +1266,6 @@ const isReviewDue = computed(() =>
                   <div class="evidence-label">{{ current.source_device_name }} 告警截图</div>
                   <div class="evidence-meta">{{ relativeTime(current.created_at) }}</div>
                 </div>
-              </div>
-            </div>
-
-            <!-- 研判截图 -->
-            <div class="evidence-group">
-              <div class="evidence-group-title">研判截图</div>
-              <div class="evidence-empty">
-                <GlobalOutlined />
-                <span>暂无手动截图，可在地图摄像头画面中截图</span>
               </div>
             </div>
 
@@ -1467,90 +1334,8 @@ const isReviewDue = computed(() =>
             </div>
           </div>
 
-          <!-- 关联 Tab ───────────────────────────────────────── -->
-          <div v-if="activeRightTab === 'related'" class="tab-content">
-
-            <!-- 前序预警（同来源历史预警） -->
-            <div class="related-section">
-              <div class="related-title"><HistoryOutlined />前序预警（同来源历史）</div>
-              <div class="related-empty">暂无同来源历史预警记录</div>
-            </div>
-
-            <!-- 疑似关联（系统提示，未确认） -->
-            <div v-if="current.related_alert_ids.length > 0" class="related-section">
-              <div class="related-title">
-                <ExclamationCircleOutlined style="color: #faad14" />
-                疑似关联预警（未确认）
-              </div>
-              <div
-                v-for="rid in current.related_alert_ids"
-                :key="rid"
-                class="related-item"
-              >
-                <div class="related-item-info">
-                  <span class="related-no mono">
-                    {{ ALERT_RECORDS.find(r => r.alert_id === rid)?.alert_no }}
-                  </span>
-                  <span class="related-name">
-                    {{ ALERT_RECORDS.find(r => r.alert_id === rid)?.alert_name }}
-                    · {{ STATUS_LABEL[ALERT_RECORDS.find(r => r.alert_id === rid)?.status ?? 'pending_verify'] }}
-                  </span>
-                  <span class="related-reason">同营地同设备 15 分钟内</span>
-                </div>
-                <div class="related-actions">
-                  <a-button size="small" type="link" @click="() => {}">关联</a-button>
-                  <a-button size="small" type="link" danger @click="() => {}">忽略</a-button>
-                </div>
-              </div>
-            </div>
-            <div v-else class="related-section">
-              <div class="related-title"><ExclamationCircleOutlined style="color: #faad14" />疑似关联预警</div>
-              <div class="related-empty">暂无系统提示的疑似关联</div>
-            </div>
-
-            <!-- 被并入的预警（本预警作为合并目标时） -->
-            <div class="related-section">
-              <div class="related-title"><MergeCellsOutlined />被并入的预警</div>
-              <div class="related-empty">尚无其他预警并入本预警</div>
-            </div>
-
-            <!-- 核实任务 -->
-            <div class="related-section">
-              <div class="related-title"><TeamOutlined />核实任务</div>
-              <div class="related-empty">暂无核实任务</div>
-              <a-button
-                v-if="showTask"
-                type="dashed"
-                size="small"
-                style="margin-top: 8px"
-                @click="taskVisible = true"
-              >
-                <template #icon><SendOutlined /></template>
-                下发核实任务
-              </a-button>
-            </div>
-
-            <!-- 关联事件（升级后显示） -->
-            <div class="related-section">
-              <div class="related-title"><LinkOutlined />关联事件</div>
-              <div v-if="current.escalated_event_id" class="related-event-item">
-                <span class="related-no mono">{{ current.escalated_event_id }}</span>
-                <a-button type="link" size="small" style="padding: 0">跳转</a-button>
-              </div>
-              <div v-else class="related-empty">尚未关联事件</div>
-            </div>
-          </div>
         </div>
       </aside>
-    </div>
-
-    <!-- ═══ 持续跟踪·复核到期横幅 ═══════════════════════════════════════ -->
-    <div v-if="isReviewDue" class="ai-review-banner">
-      <ExclamationCircleOutlined />
-      <span>该预警已超过复核周期，请尽快处置</span>
-      <a-button type="primary" size="small" danger @click="reviewVisible = true">
-        <template #icon><ReloadOutlined /></template>立即复核
-      </a-button>
     </div>
 
     <!-- ═══ 底部操作栏 ════════════════════════════════════════════════ -->
@@ -1859,30 +1644,6 @@ const isReviewDue = computed(() =>
       </div>
     </a-modal>
 
-    <!-- ═══ 弹窗：复核 ════════════════════════════════════════════════ -->
-    <a-modal v-model:open="reviewVisible" title="持续跟踪复核" :width="480"
-      :ok-text="reviewForm.action === 'resolve' ? '确认解除' : reviewForm.action === 'escalate' ? '确认升级' : '继续跟踪'"
-      :ok-type="reviewForm.action === 'resolve' || reviewForm.action === 'escalate' ? 'danger' : 'primary'"
-      :mask-closable="false"
-      @ok="submitReview">
-      <div class="modal-form">
-        <div class="form-item">
-          <label class="form-label">复核决定 <span class="required">*</span></label>
-          <a-radio-group v-model:value="reviewForm.action" style="display:flex;flex-direction:column;gap:8px">
-            <a-radio value="continue">继续跟踪<span class="radio-hint">复核周期重新计时</span></a-radio>
-            <a-radio value="resolve"><span style="color:var(--of-color-success)">解除预警</span><span class="radio-hint">威胁已消失，结束跟踪</span></a-radio>
-            <a-radio value="escalate"><span style="color:var(--of-color-error)">升级为事件</span><span class="radio-hint">威胁升级，需进入事件处置流程</span></a-radio>
-          </a-radio-group>
-        </div>
-        <div class="form-item">
-          <label class="form-label">
-            {{ reviewForm.action === 'continue' ? '跟踪说明' : reviewForm.action === 'escalate' ? '升级说明' : '解除说明' }}
-            <span class="required">*</span>
-          </label>
-          <a-textarea v-model:value="reviewForm.note" :rows="3" placeholder="描述当前情况和复核依据" />
-        </div>
-      </div>
-    </a-modal>
 
     <!-- ═══ 弹窗：待办切换确认 ════════════════════════════════════════ -->
     <a-modal v-model:open="switchConfirmVisible" title="确认切换" :width="400"

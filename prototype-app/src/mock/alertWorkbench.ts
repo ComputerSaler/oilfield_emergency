@@ -25,13 +25,6 @@ export type AlertSourceType =
   | 'app_report' // App上报
   | 'manual'     // 值班员代录
 
-export type LocationSource =
-  | 'device_target' // 设备回传目标坐标（反无、高点摄像头）
-  | 'device_site'   // 设备安装点位（CCTV）
-  | 'terminal_gps'  // 终端实时 GPS（App、车辆/手持、C类无人机）
-  | 'manual_pick'   // 人工地图选点
-  | 'none'          // 无（待定位）
-
 export type AlertCategory =
   | '入侵'
   | '无人机威胁'
@@ -58,7 +51,6 @@ export interface AlertRecord {
   camp_outside_meters: number | null  // null = 营地内
   location_lat: number | null
   location_lng: number | null
-  location_source: LocationSource   // 坐标来源，多次触发时取最近一次触发的值
   created_at: string
   last_trigger_at: string
   trigger_count: number
@@ -74,15 +66,9 @@ export interface AlertRecord {
   // 升级/合并
   escalated_event_id: string | null
   merged_into_alert_id: string | null
-  // 时限
-  verify_deadline_min: number    // 待核实时限（分钟），从 created_at 起
-  decision_deadline_min: number  // 待决策时限（分钟），从 verification_at 起
   // 跟踪
   last_review_at: string | null
-  review_interval_hours: number
-  // 关联
-  related_alert_ids: string[]
-  // 周边资源快照
+  // 周边资源快照（仅后台统计用，前端不展示）
   resource_snapshot: {
     cameras_online: number
     high_cam_aimed: boolean
@@ -191,7 +177,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.3148,
     location_lng: 2.6352,
-    location_source: 'device_target',
     created_at: minsAgo(12),
     last_trigger_at: minsAgo(8),
     trigger_count: 3,
@@ -204,11 +189,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 5,    // 已超时
-    decision_deadline_min: 10,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: ['a004'],
     resource_snapshot: { cameras_online: 2, high_cam_aimed: true, drones_available: 1 },
   },
   // ── 待核实·紧急·剩余时间少 ──────────────────────────────
@@ -227,7 +208,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.3152,
     location_lng: 2.6348,
-    location_source: 'device_target',
     created_at: minsAgo(3),
     last_trigger_at: minsAgo(3),
     trigger_count: 1,
@@ -240,11 +220,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 5,
-    decision_deadline_min: 10,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 3, high_cam_aimed: false, drones_available: 2 },
   },
   // ── 待核实·一般 ──────────────────────────────────────────
@@ -263,7 +239,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.5122,
     location_lng: 2.1124,
-    location_source: 'device_site',
     created_at: minsAgo(18),
     last_trigger_at: minsAgo(18),
     trigger_count: 1,
@@ -276,14 +251,10 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 30,
-    decision_deadline_min: 60,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 0, high_cam_aimed: false, drones_available: 1 },
   },
-  // ── 待核实·紧急（疑似关联 a001） ─────────────────────────
+  // ── 待核实·紧急 ─────────────────────────
   {
     alert_id: 'a004',
     alert_no: 'YJ-20260926-0004',
@@ -299,7 +270,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.3150,
     location_lng: 2.6355,
-    location_source: 'terminal_gps',
     created_at: minsAgo(7),
     last_trigger_at: minsAgo(7),
     trigger_count: 1,
@@ -312,11 +282,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 5,
-    decision_deadline_min: 10,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: ['a001'],
     resource_snapshot: { cameras_online: 2, high_cam_aimed: true, drones_available: 1 },
   },
   // ── 待决策·紧急 ─────────────────────────────────────────
@@ -335,7 +301,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.6426,
     location_lng: 2.3748,
-    location_source: 'device_target',
     created_at: minsAgo(35),
     last_trigger_at: minsAgo(35),
     trigger_count: 2,
@@ -348,11 +313,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 5,
-    decision_deadline_min: 10,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 1, high_cam_aimed: false, drones_available: 2 },
   },
   // ── 待决策·一般 ─────────────────────────────────────────
@@ -371,7 +332,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: 80,
     location_lat: 13.7203,
     location_lng: 2.5012,
-    location_source: 'device_site',
     created_at: minsAgo(52),
     last_trigger_at: minsAgo(52),
     trigger_count: 1,
@@ -384,11 +344,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 30,
-    decision_deadline_min: 60,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 2, high_cam_aimed: false, drones_available: 0 },
   },
   // ── 持续跟踪中（复核到期） ───────────────────────────────
@@ -407,7 +363,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: 320,
     location_lat: 13.3165,
     location_lng: 2.6340,
-    location_source: 'terminal_gps',
     created_at: hoursAgo(26),
     last_trigger_at: hoursAgo(26),
     trigger_count: 1,
@@ -420,11 +375,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 30,
-    decision_deadline_min: 60,
     last_review_at: hoursAgo(24),
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 1, high_cam_aimed: false, drones_available: 2 },
   },
   // ── 已结束·误报 ─────────────────────────────────────────
@@ -443,7 +394,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.3155,
     location_lng: 2.6344,
-    location_source: 'device_target',
     created_at: hoursAgo(3),
     last_trigger_at: hoursAgo(3),
     trigger_count: 1,
@@ -456,11 +406,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: '己方目标',
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 5,
-    decision_deadline_min: 10,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 3, high_cam_aimed: true, drones_available: 2 },
   },
   // ── 已结束·已解除 ───────────────────────────────────────
@@ -479,7 +425,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: 13.6430,
     location_lng: 2.3758,
-    location_source: 'device_site',
     created_at: hoursAgo(5),
     last_trigger_at: hoursAgo(5),
     trigger_count: 1,
@@ -492,11 +437,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 30,
-    decision_deadline_min: 60,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 1, high_cam_aimed: false, drones_available: 1 },
   },
   // ── 待核实·一般·待定位（值班员代录，未填位置） ───────────
@@ -515,7 +456,6 @@ export const ALERT_RECORDS: AlertRecord[] = [
     camp_outside_meters: null,
     location_lat: null,
     location_lng: null,
-    location_source: 'none',
     created_at: minsAgo(18),
     last_trigger_at: minsAgo(18),
     trigger_count: 1,
@@ -528,11 +468,7 @@ export const ALERT_RECORDS: AlertRecord[] = [
     false_alarm_reason: null,
     escalated_event_id: null,
     merged_into_alert_id: null,
-    verify_deadline_min: 30,
-    decision_deadline_min: 60,
     last_review_at: null,
-    review_interval_hours: 24,
-    related_alert_ids: [],
     resource_snapshot: { cameras_online: 0, high_cam_aimed: false, drones_available: 1 },
   },
 ]
@@ -544,14 +480,9 @@ export const ALERT_TIMELINES: Record<string, TimelineItem[]> = {
     { id: 't1', time: minsAgo(12), category: 'system', action: '预警生成', content: '反无设备推送入侵告警，自动生成预警' },
     { id: 't2', time: minsAgo(9), category: 'system', action: '合并触发', content: '追加第 2 条反无告警，触发次数 +1' },
     { id: 't3', time: minsAgo(8), category: 'system', action: '合并触发', content: '追加第 3 条反无告警，触发次数 +1' },
-    { id: 't4', time: minsAgo(7), category: 'system', action: '疑似关联', content: '系统判定与 #YJ-20260926-0004 可能关联（同营地，15分钟内）' },
-    { id: 't5', time: minsAgo(5), category: 'system', action: '待核实超时', content: '超过紧急档时限 5 分钟，已发送通知' },
   ],
   a005: [
     { id: 't1', time: minsAgo(35), category: 'system', action: '预警生成', content: '高点摄像头 AI 识别到越界目标，自动生成预警' },
-    { id: 't2', time: minsAgo(32), category: 'verify', action: '打开研判页', content: '王力 打开研判页', operator: '王力' },
-    { id: 't3', time: minsAgo(30), category: 'verify', action: '查看摄像头', content: '王力 调取高点-Goumeri-西门 画面', operator: '王力' },
-    { id: 't4', time: minsAgo(27), category: 'verify', action: '截图', content: '王力 保存摄像头截图作为证据', operator: '王力' },
     { id: 't5', time: minsAgo(25), category: 'verify', action: '提交核实结论', content: '王力 核实结论：真实。围界处发现1名男性，持棍徘徊', operator: '王力' },
     { id: 't6', time: minsAgo(24), category: 'system', action: '进入待决策', content: '核实完成，等待负责人决策' },
   ],
@@ -565,50 +496,6 @@ export const ALERT_TIMELINES: Record<string, TimelineItem[]> = {
 
 // ==================== 辅助函数 ====================
 
-/** 计算预警当前时限状态 */
-export function getDeadlineInfo(record: AlertRecord): {
-  overdue: boolean
-  minutesLeft: number
-  label: string
-} {
-  const now = Date.now()
-
-  if (record.status === 'pending_verify') {
-    const start = new Date(record.created_at).getTime()
-    const elapsed = (now - start) / 60000
-    const left = record.verify_deadline_min - elapsed
-    return {
-      overdue: left < 0,
-      minutesLeft: Math.abs(Math.round(left)),
-      label: left < 0 ? `超时 ${Math.abs(Math.round(left))} 分` : `剩 ${Math.round(left)} 分`,
-    }
-  }
-
-  if (record.status === 'pending_decision' && record.verification_at) {
-    const start = new Date(record.verification_at).getTime()
-    const elapsed = (now - start) / 60000
-    const left = record.decision_deadline_min - elapsed
-    return {
-      overdue: left < 0,
-      minutesLeft: Math.abs(Math.round(left)),
-      label: left < 0 ? `超时 ${Math.abs(Math.round(left))} 分` : `剩 ${Math.round(left)} 分`,
-    }
-  }
-
-  if (record.status === 'tracking' && record.last_review_at) {
-    const start = new Date(record.last_review_at).getTime()
-    const elapsed = (now - start) / 3600000
-    const left = record.review_interval_hours - elapsed
-    return {
-      overdue: left < 0,
-      minutesLeft: Math.abs(Math.round(left * 60)),
-      label: left < 0 ? `待复核（已逾期 ${Math.abs(Math.round(left))} 时）` : `复核剩 ${Math.round(left)} 时`,
-    }
-  }
-
-  return { overdue: false, minutesLeft: 0, label: '—' }
-}
-
 /** 来源类型标签 */
 export const SOURCE_LABEL: Record<AlertSourceType, string> = {
   anti_uav: '反无设备',
@@ -618,15 +505,6 @@ export const SOURCE_LABEL: Record<AlertSourceType, string> = {
   vehicle: '车辆/手持',
   app_report: 'App上报',
   manual: '值班员代录',
-}
-
-/** 坐标来源标签 */
-export const LOCATION_SOURCE_LABEL: Record<LocationSource, string> = {
-  device_target: '设备回传目标坐标',
-  device_site: '设备安装点位',
-  terminal_gps: '终端实时 GPS',
-  manual_pick: '人工地图选点',
-  none: '无（待定位）',
 }
 
 /** 状态标签 */
